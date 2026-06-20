@@ -4,8 +4,15 @@ import './globals.css';
 
 const SITE_URL = 'https://www.hansonsguide.com';
 
+// Paste the token from Google Search Console (HTML-tag verification method) here.
+// Leave empty to render no verification tag.
+const GOOGLE_SITE_VERIFICATION = '';
+
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
+  ...(GOOGLE_SITE_VERIFICATION
+    ? { verification: { google: GOOGLE_SITE_VERIFICATION } }
+    : {}),
   title: {
     default: "What's Going On | Events in Bristol & East Bay, RI",
     template: "%s | What's Going On",
