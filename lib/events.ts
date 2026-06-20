@@ -202,7 +202,10 @@ export function groupEvents(events: Event[]): GroupedEvents {
   const recurring: Event[] = [];
 
   events.forEach(event => {
-    if (event.isRecurring || !event.startDate) {
+    // Only truly undated events go to the recurring bucket.
+    // Recurring events with a specific date go into the normal timeline
+    // so they can appear as tags under their day.
+    if (!event.startDate) {
       recurring.push(event);
       return;
     }

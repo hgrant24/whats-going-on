@@ -4,7 +4,6 @@ import { useState, useMemo } from 'react';
 import { Event, Filters, GroupedEvents, RawSubmission } from '@/types/event';
 import EventFilters from './EventFilters';
 import EventSection from './EventSection';
-import SubmissionCard from './SubmissionCard';
 import SubmitEventCTA from './SubmitEventCTA';
 
 function filterEvents(events: Event[], filters: Filters): Event[] {
@@ -81,25 +80,37 @@ export default function EventsClient({ grouped, rawSubmissions, hasApprovedTab }
           </div>
         ) : (
           <div className="flex flex-col gap-8">
-            <EventSection title="Tonight" events={filtered.tonight} />
+            <EventSection title="Tonight" events={filtered.tonight} showDateHeaders={false} />
             <EventSection title="This Week" events={filtered.thisWeek} />
             <EventSection title="Upcoming" events={filtered.upcoming} />
-            <EventSection title="Recurring" events={filtered.recurring} showDateBadge={false} />
+            {/* Truly undated recurring events — shown as tags, no date headers */}
+            <EventSection title="Always Happening" events={filtered.recurring} showDateHeaders={false} />
           </div>
         )
       )}
 
-      {/* Raw submissions — shown publicly as simple link cards */}
-      {rawSubmissions.length > 0 && (
-        <section>
-          <h2 className="text-xs font-bold tracking-widest text-stone-400 uppercase mb-3">
-            Submitted Spots
+      {/* Source list — only show URL submissions, skip notes/images */}
+      {rawSubmissions.filter(s => s.link).length > 0 && (
+        <section className="pt-2">
+          <h2 className="text-xs font-bold tracking-widest text-stone-400 uppercase mb-2">
+            Sources
           </h2>
-          <div className="flex flex-col gap-3">
-            {rawSubmissions.map((s, i) => (
-              <SubmissionCard key={i} submission={s} />
-            ))}
-          </div>
+          <ul className="space-y-1">
+            {rawSubmissions
+              .filter(s => s.link)
+              .map((s, i) => (
+                <li key={i} className="text-xs">
+                  <a
+                    href={s.link}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-stone-400 hover:text-stone-600 transition-colors truncate block"
+                  >
+                    {s.link}
+                  </a>
+                </li>
+              ))}
+          </ul>
         </section>
       )}
 

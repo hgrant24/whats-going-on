@@ -11,6 +11,14 @@ const config: Config = {
       fontFamily: {
         sans: ['Inter', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'sans-serif'],
       },
+      colors: {
+        brand: {
+          navy:  '#1C3D55',
+          teal:  '#5B9BAE',
+          light: '#A8C8D4',
+          cream: '#F4EFE9',
+        },
+      },
     },
   },
   plugins: [],

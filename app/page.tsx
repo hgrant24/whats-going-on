@@ -1,3 +1,4 @@
+import Image from 'next/image';
 import { fetchEvents, groupEvents } from '@/lib/events';
 import Header from '@/components/Header';
 import EventsClient from '@/components/EventsClient';
@@ -11,9 +12,17 @@ export default async function HomePage() {
       <Header />
       <main className="max-w-3xl mx-auto px-4 py-8">
         {/* Hero */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-stone-900 tracking-tight">What&apos;s Going On</h1>
-          <p className="mt-2 text-stone-500 leading-relaxed max-w-xl">
+        <div className="mb-10 flex flex-col items-center text-center">
+          <Image
+            src="/logo.png"
+            alt="What's Going On – Bristol, RI"
+            width={300}
+            height={300}
+            className="object-contain"
+            style={{ mixBlendMode: 'multiply' }}
+            priority
+          />
+          <p className="mt-4 text-stone-500 leading-relaxed max-w-md text-sm">
             A simple local guide to trivia, live music, markets, food events, and things happening
             around Bristol and the East Bay.
           </p>
@@ -36,7 +45,7 @@ export default async function HomePage() {
       <footer className="mt-16 border-t border-stone-200 bg-white">
         <div className="max-w-3xl mx-auto px-4 py-6 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-stone-400">
           <span>What&apos;s Going On · Bristol &amp; East Bay, RI</span>
-          <a href="/submit" className="text-teal-600 hover:text-teal-800 font-medium transition-colors">
+          <a href="/submit" className="font-medium transition-colors" style={{ color: '#5B9BAE' }}>
             Submit an event →
           </a>
         </div>

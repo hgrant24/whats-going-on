@@ -1,65 +1,62 @@
 /**
- * What's Going On — Event Extraction Script
- * Google Apps Script (paste into your Google Sheet via Extensions → Apps Script)
+ * What's Going On — Event Extraction Script  v4
+ * Google Apps Script — paste into your Google Sheet via Extensions → Apps Script
  *
- * What it does:
- *  1. Fires automatically when a new form submission arrives
- *  2. Fetches the submitted URL, strips the HTML down to readable text
- *  3. Sends it to Claude to extract events and generate 3+ months of specific dates
- *  4. Writes structured rows into an "Approved Events" tab
- *  5. Runs a full re-scan every Sunday morning to pick up newly added events
+ * Handles three input types from the form:
+ *   1. URL  — fetches the page and extracts events
+ *   2. Notes — if the text looks like event schedules, sends to Claude directly
+ *   3. Image — if a Drive file is uploaded, reads it and uses Claude Vision
  *
  * One-time setup:
  *  1. Open your Google Sheet → Extensions → Apps Script
- *  2. Replace the default code with this entire file
- *  3. Click the gear icon (Project Settings) → Script Properties → Add property
- *     Name: CLAUDE_API_KEY   Value: sk-ant-...your key...
- *  4. Save, then run setupTriggers() once (select it in the dropdown → Run)
- *  5. Approve the permissions popup — this is needed for UrlFetch and Sheets access
- *
- * After events are generated:
- *  - A new "Approved Events" tab appears in your sheet
- *  - Publish it: File → Share → Publish to web → Approved Events → CSV → Copy URL
- *  - Update GOOGLE_SHEET_CSV_URL in Vercel to that new URL
- *  - Future pushes: git push → Vercel auto-deploys, no env var change needed
+ *  2. Select all, delete, paste this entire file, Save (Cmd+S)
+ *  3. Gear icon → Project Settings → Script Properties → Add:
+ *       CLAUDE_API_KEY = sk-ant-...your key...
+ *  4. Function dropdown → setupTriggers → Run → approve permissions
+ *  5. Function dropdown → runNow → Run
  */
 
-// ─── Config ──────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// CONFIG
+// ═══════════════════════════════════════════════════════════════════════════
 
 const CLAUDE_API_KEY_PROP = 'CLAUDE_API_KEY';
-const CLAUDE_MODEL = 'claude-haiku-4-5-20251001'; // fast + cheap; swap to claude-sonnet-4-6 for better results
+const CLAUDE_MODEL        = 'claude-haiku-4-5-20251001';
 const APPROVED_SHEET_NAME = 'Approved Events';
-const PROCESSED_COL_HEADER = 'Processed';
-const DEFAULT_TOWN = 'Bristol'; // fallback town when Claude can't determine it
-const MONTHS_AHEAD = 3; // how many months of dates to generate for recurring events
+const PROCESSED_COL_HDR   = 'Processed';
+const DEFAULT_TOWN        = 'Bristol';
+const MONTHS_AHEAD        = 3;
+const STALE_PROCESSING_MS = 15 * 60 * 1000;
+const MAX_IMAGE_BYTES     = 25 * 1024 * 1024; // 25 MB — skip larger images
 
 const APPROVED_HEADERS = [
-  'Event name', 'Venue', 'Town', 'Category',
-  'Start date', 'Start time', 'End time',
-  'Recurring?', 'Recurrence rule', 'Description',
-  'Source link', 'Last verified', 'Tags',
-  'Cost', 'Age friendly?', 'Outdoor?',
-  'Image URL', 'Notes',
+  'Event name','Venue','Town','Category',
+  'Start date','Start time','End time',
+  'Recurring?','Recurrence rule','Description',
+  'Source link','Last verified','Tags',
+  'Cost','Age friendly?','Outdoor?',
+  'Image URL','Submitted by',
 ];
 
-// ─── Sheet helpers ────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// SHEET HELPERS
+// ═══════════════════════════════════════════════════════════════════════════
 
 function getOrCreateApprovedSheet(ss) {
   let sheet = ss.getSheetByName(APPROVED_SHEET_NAME);
   if (!sheet) {
     sheet = ss.insertSheet(APPROVED_SHEET_NAME);
-    const headerRange = sheet.getRange(1, 1, 1, APPROVED_HEADERS.length);
-    headerRange.setValues([APPROVED_HEADERS]);
-    headerRange.setFontWeight('bold');
-    headerRange.setBackground('#f0f9ff');
+    const r = sheet.getRange(1, 1, 1, APPROVED_HEADERS.length);
+    r.setValues([APPROVED_HEADERS]);
+    r.setFontWeight('bold');
+    r.setBackground('#f0f9ff');
     Logger.log('Created "Approved Events" sheet.');
   }
   return sheet;
 }
 
 function getRawSheet(ss) {
-  const candidates = ['Form Responses 1', 'Form responses 1', 'Responses', 'Sheet1'];
-  for (const name of candidates) {
+  for (const name of ['Form Responses 1','Form responses 1','Responses','Sheet1']) {
     const s = ss.getSheetByName(name);
     if (s) return s;
   }
@@ -68,48 +65,132 @@ function getRawSheet(ss) {
 
 function getOrAddProcessedCol(rawSheet) {
   const headers = rawSheet.getRange(1, 1, 1, Math.max(rawSheet.getLastColumn(), 1)).getValues()[0];
-  const idx = headers.findIndex(h => h.toString().trim() === PROCESSED_COL_HEADER);
-  if (idx !== -1) return idx + 1; // 1-indexed
+  const idx = headers.findIndex(h => h.toString().trim() === PROCESSED_COL_HDR);
+  if (idx !== -1) return idx + 1;
   const col = rawSheet.getLastColumn() + 1;
-  rawSheet.getRange(1, col).setValue(PROCESSED_COL_HEADER).setFontWeight('bold');
+  rawSheet.getRange(1, col).setValue(PROCESSED_COL_HDR).setFontWeight('bold');
   return col;
 }
 
-function getUrlColIdx(headers) {
+function findCol(headers, ...terms) {
   return headers.findIndex(h => {
     const s = h.toString().toLowerCase().trim();
-    return s === 'url' || s === 'link' || s.includes('url') || s.includes('link');
+    return terms.some(t => s === t || s.includes(t));
   });
 }
 
-function getNotesColIdx(headers) {
-  return headers.findIndex(h => h.toString().toLowerCase().trim().includes('notes'));
+// ═══════════════════════════════════════════════════════════════════════════
+// HTML CLEANING
+// ═══════════════════════════════════════════════════════════════════════════
+
+function cleanHtmlToText(html) {
+  html = html.replace(/<head\b[\s\S]*?<\/head>/gi, ' ');
+  html = html.replace(/<script\b[\s\S]*?<\/script>/gi, ' ');
+  html = html.replace(/<style\b[\s\S]*?<\/style>/gi, ' ');
+  html = html.replace(/<noscript\b[\s\S]*?<\/noscript>/gi, ' ');
+  html = html.replace(/<svg\b[\s\S]*?<\/svg>/gi, ' ');
+  html = html.replace(/<\/?(div|section|article|p|h[1-6]|li|tr|td|th|br|hr|blockquote)[^>]*>/gi, '\n');
+  html = html.replace(/<[^>]+>/g, ' ');
+  html = html.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+             .replace(/&nbsp;/g, ' ').replace(/&mdash;/g, '—').replace(/&#\d+;/g, ' ');
+  html = html.replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+  return html;
 }
 
-// ─── Web fetch ────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// EVENT PATTERN PREPROCESSOR
+// ═══════════════════════════════════════════════════════════════════════════
 
-function fetchPageText(url) {
-  // Primary: Jina.ai reader — renders JavaScript, returns clean markdown text.
-  // Free, no API key, handles Squarespace/Wix/React/etc.
+const EVENT_TITLE_RE = /\b(LIVE MUSIC|COMEDY|TRIVIA|KARAOKE|OPEN MIC|BINGO|GAME NIGHT|DJ\b|JAZZ|BLUES|FOLK|ROCK|ACOUSTIC|BAND|ARTIST|PERFORMER|BRUNCH|HAPPY HOUR|POETRY|OPEN JAM|COMEDY NIGHT)\b/i;
+const DATE_LINE_RE   = /\b(MON|TUE|WED|THU|FRI|SAT|SUN|MONDAY|TUESDAY|WEDNESDAY|THURSDAY|FRIDAY|SATURDAY|SUNDAY)\b.{0,50}@.{0,30}\d{1,2}:\d{2}/i;
+
+function extractEventChunks(text) {
+  const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 2);
+  const chunks = [];
+  const used = new Set();
+  for (let i = 0; i < lines.length; i++) {
+    if (used.has(i)) continue;
+    if (EVENT_TITLE_RE.test(lines[i]) || DATE_LINE_RE.test(lines[i])) {
+      const start = Math.max(0, i - 1);
+      const end   = Math.min(lines.length, i + 5);
+      chunks.push(lines.slice(start, end).join(' | '));
+      for (let j = start; j < end; j++) used.add(j);
+    }
+  }
+  return chunks;
+}
+
+function looksLikeEventPage(text) {
+  return EVENT_TITLE_RE.test(text) || DATE_LINE_RE.test(text) ||
+    /\b(FRIDAY|SATURDAY|SUNDAY)\b.*@\s*\d{1,2}:\d{2}/i.test(text) ||
+    /\bno cover\b|\bcover charge\b|\bdoors at\b|\bshowtime\b/i.test(text);
+}
+
+// Notes text that looks like structured event schedules
+function looksLikeEventSchedule(text) {
+  if (text.length < 100) return false;
+  return (
+    /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(text) ||
+    /\d{1,2}(:\d{2})?\s*(am|pm)/i.test(text) ||
+    /\b(live music|trivia|open mic|karaoke|bingo|comedy|game night|happy hour)\b/i.test(text) ||
+    /(\n.*){3,}/.test(text) // 3+ lines = likely pasted schedule
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FETCH STRATEGIES
+// ═══════════════════════════════════════════════════════════════════════════
+
+function fetchViaJina(url) {
   try {
-    const jinaResp = UrlFetchApp.fetch('https://r.jina.ai/' + url, {
+    const resp = UrlFetchApp.fetch('https://r.jina.ai/' + url, {
       muteHttpExceptions: true,
       followRedirects: true,
-      headers: { 'Accept': 'text/plain' },
+      headers: { 'Accept': 'text/plain', 'X-Return-Format': 'text' },
     });
-    if (jinaResp.getResponseCode() === 200) {
-      const text = jinaResp.getContentText().trim();
-      if (text.length > 300) {
-        Logger.log('Jina reader: ' + text.length + ' chars from ' + url);
-        return text.substring(0, 12000);
-      }
-    }
-    Logger.log('Jina returned short/empty response, falling back to direct fetch.');
+    if (resp.getResponseCode() !== 200) return null;
+    const text = resp.getContentText().trim();
+    if (text.length < 200) return null;
+    Logger.log('  Jina: ' + text.length + ' chars');
+    return text.substring(0, 25000);
   } catch (e) {
-    Logger.log('Jina reader failed (' + e.message + '), falling back to direct fetch.');
+    Logger.log('  Jina failed: ' + e.message);
+    return null;
   }
+}
 
-  // Fallback: direct fetch + strip HTML tags manually
+function fetchViaWordPressRest(url) {
+  try {
+    const parsed = new URL(url);
+    const base   = parsed.origin;
+    const endpoints = [
+      base + '/wp-json/wp/v2/pages?slug=events&per_page=5',
+      base + '/wp-json/wp/v2/posts?per_page=20&orderby=date&order=desc',
+      base + '/wp-json/tribe/events/v1/events?per_page=30',
+    ];
+    for (const ep of endpoints) {
+      try {
+        const r = UrlFetchApp.fetch(ep, { muteHttpExceptions: true });
+        if (r.getResponseCode() !== 200) continue;
+        const items = JSON.parse(r.getContentText());
+        if (!Array.isArray(items) || items.length === 0) continue;
+        const texts = items.map(item => {
+          const rendered = (item.content && item.content.rendered) || item.description || '';
+          return cleanHtmlToText(rendered);
+        }).join('\n---\n');
+        if (texts.length > 300) {
+          Logger.log('  WP REST: ' + texts.length + ' chars');
+          return texts.substring(0, 25000);
+        }
+      } catch (_) {}
+    }
+  } catch (e) {
+    Logger.log('  WP REST failed: ' + e.message);
+  }
+  return null;
+}
+
+function fetchViaDirect(url) {
   try {
     const resp = UrlFetchApp.fetch(url, {
       muteHttpExceptions: true,
@@ -117,351 +198,505 @@ function fetchPageText(url) {
       headers: { 'User-Agent': 'Mozilla/5.0 (compatible; WhatsGoingOnBot/1.0)' },
     });
     if (resp.getResponseCode() !== 200) {
-      Logger.log('Non-200 from ' + url + ': ' + resp.getResponseCode());
+      Logger.log('  Direct: HTTP ' + resp.getResponseCode());
       return null;
     }
-    let html = resp.getContentText().substring(0, 40000);
-    html = html.replace(/<script[\s\S]*?<\/script>/gi, ' ');
-    html = html.replace(/<style[\s\S]*?<\/style>/gi, ' ');
-    html = html.replace(/<[^>]+>/g, ' ');
-    html = html.replace(/\s{2,}/g, ' ').trim();
-    Logger.log('Direct fetch: ' + html.length + ' chars from ' + url);
-    return html.substring(0, 10000);
+    const rawHtml = resp.getContentText();
+    const cleaned = cleanHtmlToText(rawHtml);
+    Logger.log('  Direct: raw=' + rawHtml.length + ' → cleaned=' + cleaned.length);
+    return cleaned.substring(0, 30000);
   } catch (e) {
-    Logger.log('Direct fetch error for ' + url + ': ' + e.message);
+    Logger.log('  Direct fetch error: ' + e.message);
     return null;
   }
 }
 
-// ─── Claude API ───────────────────────────────────────────────────────────────
+function fetchPageText(url) {
+  Logger.log('Fetching URL: ' + url);
+  const jina = fetchViaJina(url);
+  if (jina && jina.length > 300) return jina;
+  const wp = fetchViaWordPressRest(url);
+  if (wp && wp.length > 300) return wp;
+  return fetchViaDirect(url);
+}
 
-function callClaude(pageText, sourceUrl) {
-  const apiKey = PropertiesService.getScriptProperties().getProperty(CLAUDE_API_KEY_PROP);
-  if (!apiKey) throw new Error('CLAUDE_API_KEY not set in Script Properties.');
+// ═══════════════════════════════════════════════════════════════════════════
+// DRIVE IMAGE HELPERS
+// ═══════════════════════════════════════════════════════════════════════════
 
-  const tz = 'America/New_York';
-  const today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
-  const endDate = new Date();
+function isDriveUrl(value) {
+  return /drive\.google\.com/i.test(value);
+}
+
+function extractDriveFileId(url) {
+  const m1 = url.match(/[?&]id=([^&\s,]+)/);
+  if (m1) return m1[1];
+  const m2 = url.match(/\/file\/d\/([^/\s,]+)/);
+  if (m2) return m2[1];
+  return null;
+}
+
+function fetchDriveImageAsBase64(fileId) {
+  const file = DriveApp.getFileById(fileId);
+  const size = file.getSize();
+  if (size > MAX_IMAGE_BYTES) {
+    Logger.log('  Image too large (' + Math.round(size / 1024) + ' KB) — skipping');
+    return null;
+  }
+  const blob     = file.getBlob();
+  const bytes    = blob.getBytes();
+  const base64   = Utilities.base64Encode(bytes);
+  let mimeType   = blob.getContentType() || 'image/jpeg';
+  const allowed  = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+  if (!allowed.includes(mimeType)) mimeType = 'image/jpeg';
+  Logger.log('  Image: ' + file.getName() + ' (' + mimeType + ', ' + Math.round(size / 1024) + ' KB)');
+  return { base64, mimeType };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CLAUDE API
+// ═══════════════════════════════════════════════════════════════════════════
+
+function buildPrompt(pageText, sourceUrl, isRetry) {
+  const tz         = 'America/New_York';
+  const today      = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+  const year       = today.substring(0, 4);
+  const endDate    = new Date();
   endDate.setMonth(endDate.getMonth() + MONTHS_AHEAD);
   const endDateStr = Utilities.formatDate(endDate, tz, 'yyyy-MM-dd');
+  const retryNote  = isRetry
+    ? '\n\nIMPORTANT: The content clearly contains event listings. You MUST extract each event title and its date/time. Do NOT return [] unless there are truly zero event title + date pairs.'
+    : '';
 
-  const prompt = `You extract events from venue/restaurant websites for a local events guide in Bristol and the East Bay of Rhode Island.
+  return `You extract events from venue/restaurant websites for a local events guide in Bristol and the East Bay of Rhode Island.
 
-Today: ${today}. The current year is ${today.substring(0, 4)}. Generate events from ${today} through ${endDateStr}.
+Today: ${today} (year: ${year}). Extract events from ${today} through ${endDateStr}.
 
-Webpage from: ${sourceUrl}
+Source: ${sourceUrl}
 ---
 ${pageText}
 ---
 
-Instructions:
-- Extract ALL events: trivia nights, live music, open mic, karaoke, game nights, markets, themed nights, etc.
-- For RECURRING events (e.g. "Trivia every Tuesday at 7pm"), generate one entry per date from today through ${endDateStr}.
-- YEAR HANDLING: If a date shows only month/day (like "8/1" or "August 1"), assume the current year (${today.substring(0, 4)}) unless that month has already passed this year, in which case use next year.
-- Include today's events — do not skip them.
-- Only skip events that ended more than 1 day ago.
-- If the venue/town is unclear, use "Bristol" and infer the venue name from the page title or content.
-- For cost: use "Free" if free, "$X" for paid, or leave blank if unknown.
+Rules:
+- Extract ALL events: live music, trivia, open mic, karaoke, bingo, comedy, game nights, markets, themed nights, etc.
+- For RECURRING events (e.g. "Trivia every Tuesday 7pm"), generate one row per date from today through ${endDateStr}.
+- YEAR: dates with only month+day — use ${year} unless that date already passed, then use ${parseInt(year) + 1}.
+- Include today's events. Skip events that fully ended more than 1 day ago.
+- Infer venue name from page title or context if not explicit. Default town: Bristol.
+- Cost: "Free", "$X", or empty string.${retryNote}
 
-Return ONLY a JSON array — no markdown fences, no extra text. Schema:
-[
-  {
-    "name": "string — clear event name",
-    "venue": "string — establishment name",
-    "town": "string — Bristol, Warren, Providence, Newport, or Other",
-    "category": "Trivia | Live Music | Food/Drink | Sports/League | Market | Family | Comedy | Arts/Culture | Other",
-    "startDate": "YYYY-MM-DD",
-    "startTime": "HH:MM in 24h, or empty string",
-    "endTime": "HH:MM in 24h, or empty string",
-    "isRecurring": true | false,
-    "recurrenceRule": "e.g. Every Tuesday at 7 PM, or empty string",
-    "description": "1–2 sentence description, or empty string",
-    "cost": "Free | $X | empty string",
-    "ageFriendly": true | false | null,
-    "outdoor": true | false | null
-  }
-]
+Return ONLY a JSON array, no markdown, no prose. Schema per object:
+{
+  "name": "event title",
+  "venue": "establishment name",
+  "town": "Bristol | Warren | Providence | Newport | Other",
+  "category": "Trivia | Live Music | Food/Drink | Sports/League | Market | Family | Comedy | Arts/Culture | Other",
+  "startDate": "YYYY-MM-DD",
+  "startTime": "HH:MM (24h) or empty",
+  "endTime": "HH:MM (24h) or empty",
+  "isRecurring": true|false,
+  "recurrenceRule": "e.g. Every Tuesday at 7 PM, or empty",
+  "description": "1–2 sentences or empty",
+  "cost": "Free | $X | empty",
+  "ageFriendly": true|false|null,
+  "outdoor": true|false|null
+}
+If no events found after genuinely searching, return [].`;
+}
 
-If no events found, return [].`;
+function buildImagePrompt(sourceLabel) {
+  const tz         = 'America/New_York';
+  const today      = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+  const year       = today.substring(0, 4);
+  const endDate    = new Date();
+  endDate.setMonth(endDate.getMonth() + MONTHS_AHEAD);
+  const endDateStr = Utilities.formatDate(endDate, tz, 'yyyy-MM-dd');
 
-  const payload = JSON.stringify({
-    model: CLAUDE_MODEL,
-    max_tokens: 4096,
-    messages: [
-      { role: 'user', content: prompt },
-      { role: 'assistant', content: '[' }, // prefill — forces Claude to continue the JSON array
-    ],
-  });
+  return `You extract events from photos of chalkboards, event posters, flyers, menus, and signage for a local events guide in Bristol and the East Bay of Rhode Island.
+
+Today: ${today} (year: ${year}). Extract events from ${today} through ${endDateStr}.
+
+Source: ${sourceLabel}
+
+Carefully read the image and extract ALL visible events:
+- Live music, bands, DJs, artists
+- Trivia nights, game nights, bingo, karaoke, open mic, comedy
+- Special dinners, tastings, food events, markets, art shows
+- Any community or recurring weekly/monthly events
+
+Rules:
+- For recurring events (e.g. "Every Tuesday"), generate one row per date from today through ${endDateStr}.
+- YEAR: if only month+day shown, use ${year} unless past, then ${parseInt(year) + 1}.
+- Infer venue from any logos/name visible in the image. Default town: Bristol.
+- Cost: "Free", "$X", or empty string.
+
+Return ONLY a JSON array, no markdown, no prose. Schema per object:
+{
+  "name": "event title",
+  "venue": "establishment name",
+  "town": "Bristol | Warren | Providence | Newport | Other",
+  "category": "Trivia | Live Music | Food/Drink | Sports/League | Market | Family | Comedy | Arts/Culture | Other",
+  "startDate": "YYYY-MM-DD",
+  "startTime": "HH:MM (24h) or empty",
+  "endTime": "HH:MM (24h) or empty",
+  "isRecurring": true|false,
+  "recurrenceRule": "e.g. Every Tuesday at 7 PM, or empty",
+  "description": "1–2 sentences or empty",
+  "cost": "Free | $X | empty",
+  "ageFriendly": true|false|null,
+  "outdoor": true|false|null
+}
+If no events visible, return [].`;
+}
+
+function callClaudeApi(payload) {
+  const apiKey = PropertiesService.getScriptProperties().getProperty(CLAUDE_API_KEY_PROP);
+  if (!apiKey) throw new Error('CLAUDE_API_KEY not set in Script Properties.');
 
   const resp = UrlFetchApp.fetch('https://api.anthropic.com/v1/messages', {
     method: 'post',
     contentType: 'application/json',
-    headers: {
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-    },
-    payload,
+    headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+    payload: JSON.stringify(payload),
     muteHttpExceptions: true,
   });
 
   const body = JSON.parse(resp.getContentText());
-  if (body.error) throw new Error('Claude error: ' + body.error.message);
+  if (body.error) throw new Error('Claude API error: ' + body.error.message);
 
   const continuation = body.content[0].text.trim();
-  Logger.log('Claude continuation (first 400 chars):\n' + continuation.substring(0, 400));
-
+  Logger.log('  Claude (first 400 chars):\n' + continuation.substring(0, 400));
   return extractJsonArray(continuation);
 }
 
 function extractJsonArray(text) {
-  // Strategy 1: prepend '[' from our prefill (normal case — Claude outputs the rest of the array)
-  // Strategy 2: text already starts with '[' (Claude echoed the bracket)
-  // Strategy 3: strip markdown fences then try again
-  // Strategy 4: find first '[' and last ']' anywhere in the text
   const candidates = [
     '[' + text,
     text,
     text.replace(/^```json?\s*/i, '').replace(/\s*```$/i, '').trim(),
   ];
-
-  for (const candidate of candidates) {
-    // Direct parse
-    try { return JSON.parse(candidate); } catch (_) {}
-
-    // Slice from first '[' to last ']'
-    const s = candidate.indexOf('[');
-    const e = candidate.lastIndexOf(']');
+  for (const c of candidates) {
+    try { const r = JSON.parse(c); if (Array.isArray(r)) return r; } catch (_) {}
+    const s = c.indexOf('['), e = c.lastIndexOf(']');
     if (s !== -1 && e > s) {
-      try { return JSON.parse(candidate.slice(s, e + 1)); } catch (_) {}
+      try { const r = JSON.parse(c.slice(s, e + 1)); if (Array.isArray(r)) return r; } catch (_) {}
     }
   }
-
-  Logger.log('All JSON parse strategies failed. Full text:\n' + text);
-  throw new Error('Could not parse Claude response as JSON. Open View → Logs to see what Claude returned.');
+  Logger.log('All JSON strategies failed. Raw:\n' + text);
+  throw new Error('Could not parse Claude response as JSON.');
 }
 
-// ─── Write events ─────────────────────────────────────────────────────────────
+/** Extract events from a fetched page text */
+function callClaude(pageText, sourceUrl) {
+  const chunks = extractEventChunks(pageText);
+  let textToSend = pageText;
+  if (chunks.length > 0) {
+    textToSend = ('EXTRACTED EVENT BLOCKS:\n' + chunks.join('\n') + '\n\nFULL PAGE TEXT:\n' + pageText).substring(0, 30000);
+    Logger.log('  Preprocessor found ' + chunks.length + ' event chunks.');
+  }
+
+  let events = callClaudeApi({
+    model: CLAUDE_MODEL,
+    max_tokens: 4096,
+    messages: [
+      { role: 'user', content: buildPrompt(textToSend, sourceUrl, false) },
+      { role: 'assistant', content: '[' },
+    ],
+  });
+  Logger.log('  Text pass 1: ' + events.length + ' events');
+
+  if (events.length === 0 && looksLikeEventPage(pageText)) {
+    Logger.log('  Page looks like events but got [] — retrying...');
+    Utilities.sleep(1500);
+    events = callClaudeApi({
+      model: CLAUDE_MODEL,
+      max_tokens: 4096,
+      messages: [
+        { role: 'user', content: buildPrompt(textToSend, sourceUrl, true) },
+        { role: 'assistant', content: '[' },
+      ],
+    });
+    Logger.log('  Text pass 2 (retry): ' + events.length + ' events');
+  }
+  return events;
+}
+
+/** Extract events from pasted notes text */
+function callClaudeWithNotes(notes, sourceLabel) {
+  Logger.log('  Sending notes text to Claude (' + notes.length + ' chars)');
+  return callClaudeApi({
+    model: CLAUDE_MODEL,
+    max_tokens: 4096,
+    messages: [
+      { role: 'user', content: buildPrompt(notes, sourceLabel + ' (pasted notes)', false) },
+      { role: 'assistant', content: '[' },
+    ],
+  });
+}
+
+/** Extract events from a Drive image (chalkboard / poster photo) */
+function callClaudeWithImage(base64, mimeType, sourceLabel) {
+  Logger.log('  Sending image to Claude Vision (' + mimeType + ')');
+  return callClaudeApi({
+    model: CLAUDE_MODEL,
+    max_tokens: 4096,
+    messages: [
+      {
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: mimeType, data: base64 } },
+          { type: 'text', text: buildImagePrompt(sourceLabel) },
+        ],
+      },
+      { role: 'assistant', content: '[' },
+    ],
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WRITE EVENTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+function eventKey(venue, name, date, time) {
+  return [venue, name, date, time].map(s => {
+    if (s === null || s === undefined || s === '') return '';
+    if (s instanceof Date) return Utilities.formatDate(s, 'America/New_York', 'yyyy-MM-dd');
+    return String(s).toLowerCase().trim();
+  }).join('|');
+}
 
 function buildExistingKeys(approvedSheet) {
   const keys = new Set();
   const vals = approvedSheet.getDataRange().getValues();
   for (let i = 1; i < vals.length; i++) {
-    const name = (vals[i][0] || '').toString().toLowerCase().trim();
-    const date = (vals[i][4] || '').toString().trim();
-    if (name && date) keys.add(name + '|' + date);
+    const k = eventKey(vals[i][1], vals[i][0], vals[i][4], vals[i][5]);
+    if (k.length > 3) keys.add(k);
   }
   return keys;
 }
 
-function eventKey(name, date) {
-  return name.toLowerCase().trim() + '|' + date.trim();
-}
-
-function writeEvents(approvedSheet, events, sourceUrl, notes, existingKeys) {
-  const tz = 'America/New_York';
-  const today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+function writeEvents(approvedSheet, events, sourceUrl, submittedBy, existingKeys) {
+  const tz      = 'America/New_York';
+  const today   = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+  const cutoff  = Utilities.formatDate(new Date(Date.now() - 86400000), tz, 'yyyy-MM-dd');
   let added = 0;
-
-  // Cutoff = yesterday, so today's events are always included
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
-  const cutoff = Utilities.formatDate(yesterday, tz, 'yyyy-MM-dd');
 
   for (const e of events) {
     if (!e.name || !e.startDate) continue;
-    if (e.startDate < cutoff) continue; // skip events older than yesterday
-    const key = eventKey(e.name, e.startDate);
-    if (existingKeys.has(key)) continue; // skip duplicates
+    if (e.startDate < cutoff) continue;
+    const key = eventKey(e.venue, e.name, e.startDate, e.startTime);
+    if (existingKeys.has(key)) continue;
     existingKeys.add(key);
 
     approvedSheet.appendRow([
-      e.name.trim(),
-      (e.venue || '').trim(),
-      (e.town || DEFAULT_TOWN).trim(),
-      (e.category || 'Other').trim(),
+      (e.name            || '').trim(),
+      (e.venue           || '').trim(),
+      (e.town            || DEFAULT_TOWN).trim(),
+      (e.category        || 'Other').trim(),
       e.startDate,
-      e.startTime || '',
-      e.endTime || '',
-      e.isRecurring ? 'Yes' : 'No',
-      (e.recurrenceRule || '').trim(),
-      (e.description || notes || '').trim(),
+      e.startTime        || '',
+      e.endTime          || '',
+      e.isRecurring      ? 'Yes' : 'No',
+      (e.recurrenceRule  || '').trim(),
+      (e.description     || '').trim(),
       sourceUrl,
       today,
       '',
-      (e.cost || '').trim(),
+      (e.cost            || '').trim(),
       e.ageFriendly === true ? 'Yes' : e.ageFriendly === false ? 'No' : '',
-      e.outdoor === true ? 'Yes' : e.outdoor === false ? 'No' : '',
+      e.outdoor     === true ? 'Yes' : e.outdoor     === false ? 'No' : '',
       '',
-      '',
+      (submittedBy       || '').trim(),
     ]);
     added++;
   }
   return added;
 }
 
-// ─── Main processing ──────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// STUCK-ROW DETECTION
+// ═══════════════════════════════════════════════════════════════════════════
+
+function processingStatus() { return 'processing|' + Date.now(); }
+
+function isStuckProcessing(status) {
+  if (!status.startsWith('processing')) return false;
+  const parts = status.split('|');
+  if (parts.length < 2) return true;
+  const ts = parseInt(parts[1], 10);
+  return isNaN(ts) || (Date.now() - ts > STALE_PROCESSING_MS);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MAIN PROCESSING LOOP
+// ═══════════════════════════════════════════════════════════════════════════
 
 function processNewSubmissions() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const rawSheet = getRawSheet(ss);
+  const ss            = SpreadsheetApp.getActiveSpreadsheet();
+  const rawSheet      = getRawSheet(ss);
   const approvedSheet = getOrCreateApprovedSheet(ss);
-  const processedCol = getOrAddProcessedCol(rawSheet);
+  const processedCol  = getOrAddProcessedCol(rawSheet);
 
   const data = rawSheet.getDataRange().getValues();
-  if (data.length < 2) {
-    Logger.log('No submissions yet.');
-    return;
-  }
+  if (data.length < 2) { Logger.log('No submissions yet.'); return; }
 
-  const headers = data[0];
-  const urlCol = getUrlColIdx(headers);
-  const notesCol = getNotesColIdx(headers);
+  const headers       = data[0];
+  const urlCol        = findCol(headers, 'url', 'link');
+  const notesCol      = findCol(headers, 'notes');
+  const imageCol      = findCol(headers, 'upload image', 'image instead', 'image', 'photo', 'picture', 'file upload');
+  const submittedByCol = findCol(headers, 'submitted by', 'your name', 'submitter', 'name');
 
-  if (urlCol === -1) {
-    Logger.log('Cannot find URL/Link column in raw sheet. Headers: ' + headers.join(', '));
-    return;
-  }
+  Logger.log('Columns — url:' + urlCol + ' notes:' + notesCol + ' image:' + imageCol + ' submittedBy:' + submittedByCol);
 
   const existingKeys = buildExistingKeys(approvedSheet);
-  const tz = 'America/New_York';
-  const today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+  const tz           = 'America/New_York';
+  const today        = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
   let totalAdded = 0;
 
   for (let row = 1; row < data.length; row++) {
-    const url = (data[row][urlCol] || '').toString().trim();
-    const notes = notesCol !== -1 ? (data[row][notesCol] || '').toString().trim() : '';
-    const status = (data[row][processedCol - 1] || '').toString().trim();
+    const url         = urlCol         !== -1 ? (data[row][urlCol]         || '').toString().trim() : '';
+    const notes       = notesCol       !== -1 ? (data[row][notesCol]       || '').toString().trim() : '';
+    const imageValue  = imageCol       !== -1 ? (data[row][imageCol]       || '').toString().trim() : '';
+    const submittedBy = submittedByCol !== -1 ? (data[row][submittedByCol] || '').toString().trim() : '';
+    const status      = (data[row][processedCol - 1] || '').toString().trim();
 
-    if (!url) continue;
-    if (status.startsWith('done') || status.startsWith('processing')) continue;
-    // Allow 'recheck' (set by weeklyRecheck) to fall through
+    // Need at least one input
+    if (!url && !notes && !imageValue) continue;
+    if (status.startsWith('done')) continue;
+    if (status.startsWith('processing') && !isStuckProcessing(status)) continue;
 
-    Logger.log('[Row ' + (row + 1) + '] Processing: ' + url);
-    rawSheet.getRange(row + 1, processedCol).setValue('processing...');
+    const sources = [url && 'URL', notes && 'notes', imageValue && 'image'].filter(Boolean).join('+');
+    Logger.log('[Row ' + (row + 1) + '] Processing (' + sources + ')'
+      + (submittedBy ? ' by ' + submittedBy : ''));
+
+    rawSheet.getRange(row + 1, processedCol).setValue(processingStatus());
     SpreadsheetApp.flush();
 
     try {
-      // Check execution time — Apps Script has a 6-min limit
-      const pageText = fetchPageText(url);
-      if (!pageText) {
-        rawSheet.getRange(row + 1, processedCol).setValue('error: could not fetch page');
+      let allEvents = [];
+
+      // 1. URL → fetch and extract
+      if (url) {
+        const pageText = fetchPageText(url);
+        if (pageText) {
+          const ev = callClaude(pageText, url);
+          Logger.log('  URL → ' + ev.length + ' events');
+          allEvents = allEvents.concat(ev);
+        } else {
+          Logger.log('  URL fetch failed: ' + url);
+        }
+      }
+
+      // 2. Notes → extract if it looks like a schedule
+      if (notes && looksLikeEventSchedule(notes)) {
+        Utilities.sleep(1000);
+        const ev = callClaudeWithNotes(notes, url || 'Pasted schedule');
+        Logger.log('  Notes → ' + ev.length + ' events');
+        allEvents = allEvents.concat(ev);
+      }
+
+      // 3. Image → Claude Vision
+      if (imageValue) {
+        // Form may produce a comma-separated list of Drive URLs
+        const driveUrls = imageValue.split(',').map(v => v.trim()).filter(v => isDriveUrl(v));
+        for (const driveUrl of driveUrls) {
+          const fileId = extractDriveFileId(driveUrl);
+          if (!fileId) { Logger.log('  Could not extract Drive ID from: ' + driveUrl); continue; }
+          const img = fetchDriveImageAsBase64(fileId);
+          if (!img) continue;
+          Utilities.sleep(1000);
+          const ev = callClaudeWithImage(img.base64, img.mimeType, url || 'Uploaded image');
+          Logger.log('  Image → ' + ev.length + ' events');
+          allEvents = allEvents.concat(ev);
+        }
+      }
+
+      if (allEvents.length === 0) {
+        const noInput = !url && !imageValue;
+        rawSheet.getRange(row + 1, processedCol).setValue(
+          noInput ? 'done — 0 events (notes only, no extractable dates)' : 'done — 0 events found'
+        );
         continue;
       }
 
-      const events = callClaude(pageText, url);
-      Logger.log('  → Extracted ' + events.length + ' events');
-
-      const added = writeEvents(approvedSheet, events, url, notes, existingKeys);
+      const added = writeEvents(approvedSheet, allEvents, url || imageValue || 'manual', submittedBy, existingKeys);
       totalAdded += added;
-
-      rawSheet.getRange(row + 1, processedCol).setValue(
-        'done — ' + added + ' events added ' + today
-      );
+      rawSheet.getRange(row + 1, processedCol).setValue('done — ' + added + ' events added ' + today);
     } catch (err) {
       Logger.log('  → Error: ' + err.message);
-      rawSheet.getRange(row + 1, processedCol).setValue(
-        'error: ' + err.message.substring(0, 120)
-      );
+      rawSheet.getRange(row + 1, processedCol).setValue('error: ' + err.message.substring(0, 120));
     }
 
-    // Small pause between submissions to avoid rate limits
     if (row < data.length - 1) Utilities.sleep(2000);
   }
 
-  Logger.log('Finished. Added ' + totalAdded + ' new events total.');
+  Logger.log('Finished. Total new events added: ' + totalAdded);
 }
 
-// ─── Weekly re-scan ───────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// WEEKLY RE-SCAN
+// ═══════════════════════════════════════════════════════════════════════════
 
 function weeklyRecheck() {
-  // Reset all processed rows so we re-scan every URL for new future dates
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const rawSheet = getRawSheet(ss);
+  const ss           = SpreadsheetApp.getActiveSpreadsheet();
+  const rawSheet     = getRawSheet(ss);
   const processedCol = getOrAddProcessedCol(rawSheet);
-  const data = rawSheet.getDataRange().getValues();
+  const data         = rawSheet.getDataRange().getValues();
 
   for (let row = 1; row < data.length; row++) {
     const status = (data[row][processedCol - 1] || '').toString().trim();
-    if (status.startsWith('done')) {
-      rawSheet.getRange(row + 1, processedCol).setValue('recheck');
-    }
+    if (status.startsWith('done')) rawSheet.getRange(row + 1, processedCol).setValue('recheck');
   }
 
-  // Also purge Approved Events rows that are now in the past (older than 2 days)
   const approvedSheet = ss.getSheetByName(APPROVED_SHEET_NAME);
   if (approvedSheet) {
-    const tz = 'America/New_York';
-    const yesterday = new Date();
-    yesterday.setDate(yesterday.getDate() - 2);
-    const cutoff = Utilities.formatDate(yesterday, tz, 'yyyy-MM-dd');
-
-    const rows = approvedSheet.getDataRange().getValues();
+    const tz      = 'America/New_York';
+    const cutoff  = Utilities.formatDate(new Date(Date.now() - 2 * 86400000), tz, 'yyyy-MM-dd');
+    const rows    = approvedSheet.getDataRange().getValues();
     const toDelete = [];
     for (let i = rows.length - 1; i >= 1; i--) {
-      const date = (rows[i][4] || '').toString().trim();
+      const date        = (rows[i][4] || '').toString().trim();
       const isRecurring = (rows[i][7] || '').toString().trim().toLowerCase() === 'yes';
       if (date && date < cutoff && !isRecurring) toDelete.push(i + 1);
     }
     toDelete.forEach(r => approvedSheet.deleteRow(r));
-    if (toDelete.length > 0) Logger.log('Removed ' + toDelete.length + ' past events.');
+    if (toDelete.length) Logger.log('Purged ' + toDelete.length + ' past events.');
   }
 
   processNewSubmissions();
 }
 
-// ─── Trigger setup (run once) ─────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// TRIGGER SETUP
+// ═══════════════════════════════════════════════════════════════════════════
 
 function setupTriggers() {
-  // Remove any existing triggers first
   ScriptApp.getProjectTriggers().forEach(t => ScriptApp.deleteTrigger(t));
-
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-
-  // Fire when a new form response arrives
-  ScriptApp.newTrigger('onFormSubmitHandler')
-    .forSpreadsheet(ss)
-    .onFormSubmit()
-    .create();
-
-  // Full weekly re-scan every Sunday at 6 AM Eastern
-  ScriptApp.newTrigger('weeklyRecheck')
-    .timeBased()
-    .onWeekDay(ScriptApp.WeekDay.SUNDAY)
-    .atHour(6)
-    .inTimezone('America/New_York')
-    .create();
-
-  Logger.log('✓ Triggers created: onFormSubmit + weekly Sunday 6 AM ET');
+  ScriptApp.newTrigger('onFormSubmitHandler').forSpreadsheet(ss).onFormSubmit().create();
+  ScriptApp.newTrigger('weeklyRecheck').timeBased().onWeekDay(ScriptApp.WeekDay.SUNDAY)
+    .atHour(6).inTimezone('America/New_York').create();
+  Logger.log('✓ Triggers set: onFormSubmit + Sunday 6 AM ET');
 }
 
 function onFormSubmitHandler(e) {
-  // Called automatically on new form submission
-  Utilities.sleep(2000); // give Sheets a moment to write the row
+  Utilities.sleep(2000);
   processNewSubmissions();
 }
 
-// ─── Manual test / one-off run ────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// MANUAL HELPERS
+// ═══════════════════════════════════════════════════════════════════════════
 
-function runNow() {
-  // Select this function and hit Run to process all pending URLs immediately
-  processNewSubmissions();
-}
-
-function resetErrors() {
-  // Clears "error: ..." and stuck "processing..." rows so they'll be re-processed.
-  _resetRows(status => status.startsWith('error') || status.startsWith('processing'));
-}
-
-function resetAll() {
-  // Clears ALL processed statuses (errors, done, done-0, recheck) — re-processes every URL.
-  _resetRows(() => true);
-}
+function runNow()      { processNewSubmissions(); }
+function resetErrors() { _resetRows(s => s.startsWith('error') || isStuckProcessing(s)); }
+function resetAll()    { _resetRows(() => true); }
 
 function _resetRows(predicate) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const rawSheet = getRawSheet(ss);
+  const ss           = SpreadsheetApp.getActiveSpreadsheet();
+  const rawSheet     = getRawSheet(ss);
   const processedCol = getOrAddProcessedCol(rawSheet);
-  const data = rawSheet.getDataRange().getValues();
+  const data         = rawSheet.getDataRange().getValues();
   let cleared = 0;
   for (let row = 1; row < data.length; row++) {
     const status = (data[row][processedCol - 1] || '').toString().trim();
@@ -470,5 +705,54 @@ function _resetRows(predicate) {
       cleared++;
     }
   }
-  Logger.log('Cleared ' + cleared + ' rows. Run runNow() to re-process them.');
+  Logger.log('Cleared ' + cleared + ' rows. Run runNow() to re-process.');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DEBUG HELPERS
+// ═══════════════════════════════════════════════════════════════════════════
+
+function debugFetch(url) {
+  url = url || 'https://www.borealiscoffee.com/events/';
+  Logger.log('=== debugFetch: ' + url + ' ===');
+  const jina   = fetchViaJina(url);
+  Logger.log('Jina: ' + (jina ? jina.length + ' chars' : 'null'));
+  if (jina) Logger.log(jina.substring(0, 800));
+  const wp     = fetchViaWordPressRest(url);
+  Logger.log('WP REST: ' + (wp ? wp.length + ' chars' : 'null'));
+  const direct = fetchViaDirect(url);
+  Logger.log('Direct: ' + (direct ? direct.length + ' chars' : 'null'));
+  if (direct) Logger.log(direct.substring(0, 1500));
+  const text   = jina || wp || direct || '';
+  const chunks = extractEventChunks(text);
+  Logger.log('Event chunks: ' + chunks.length);
+  chunks.slice(0, 5).forEach((c, i) => Logger.log('  ' + (i+1) + ': ' + c));
+  Logger.log('Looks like event page: ' + looksLikeEventPage(text));
+}
+
+function debugBorealis() { debugFetch('https://www.borealiscoffee.com/events/'); }
+
+function debugClaude(url) {
+  url = url || 'https://www.borealiscoffee.com/events/';
+  Logger.log('=== debugClaude: ' + url + ' ===');
+  const pageText = fetchPageText(url);
+  if (!pageText) { Logger.log('fetchPageText returned null'); return; }
+  Logger.log('Page text: ' + pageText.length + ' chars');
+  const events = callClaude(pageText, url);
+  Logger.log('Events: ' + events.length);
+  events.slice(0, 5).forEach((e, i) => Logger.log('  ' + (i+1) + ': ' + JSON.stringify(e)));
+}
+
+/** Test image extraction — pass a Drive share URL */
+function debugImage(driveUrl) {
+  driveUrl = driveUrl || 'https://drive.google.com/file/d/YOUR_FILE_ID/view';
+  Logger.log('=== debugImage: ' + driveUrl + ' ===');
+  const fileId = extractDriveFileId(driveUrl);
+  if (!fileId) { Logger.log('Could not extract file ID'); return; }
+  const img = fetchDriveImageAsBase64(fileId);
+  if (!img) { Logger.log('Could not fetch image'); return; }
+  Logger.log('Image loaded: ' + img.mimeType + ', base64 length: ' + img.base64.length);
+  const events = callClaudeWithImage(img.base64, img.mimeType, 'Test image');
+  Logger.log('Events found: ' + events.length);
+  events.forEach((e, i) => Logger.log('  ' + (i+1) + ': ' + JSON.stringify(e)));
 }
