@@ -787,6 +787,94 @@ function onFormSubmitHandler(e) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// WEB APP ENDPOINT  (native submit form on hansonsguide.com posts here)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Deploy: Apps Script editor → Deploy → New deployment → type "Web app"
+//   - Execute as: Me
+//   - Who has access: Anyone
+//   Copy the /exec URL → set NEXT_PUBLIC_SUBMIT_ENDPOINT in Vercel + .env.local
+//
+// Re-deploy (Deploy → Manage deployments → edit → Version: New) after any change.
+
+function doGet() {
+  return ContentService
+    .createTextOutput(JSON.stringify({ ok: true, service: "What's Going On submit endpoint" }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function doPost(e) {
+  try {
+    const p = (e && e.parameter) ? e.parameter : {};
+    const url   = (p.url   || '').toString().trim();
+    const notes = (p.notes || '').toString().trim();
+    const name  = (p.name  || '').toString().trim();
+
+    if (!url && !notes && !p.imageData) {
+      return jsonOut({ ok: false, error: 'Empty submission' });
+    }
+
+    // Optional photo (base64 from the browser) → saved to Drive
+    let imageUrl = '';
+    if (p.imageData) {
+      imageUrl = saveBase64ToDrive(p.imageData, p.imageName || 'submission.jpg', p.imageType || 'image/jpeg');
+    }
+
+    const ss       = SpreadsheetApp.getActiveSpreadsheet();
+    const rawSheet  = getRawSheet(ss);
+    const headers   = rawSheet.getRange(1, 1, 1, Math.max(rawSheet.getLastColumn(), 1)).getValues()[0];
+
+    // Place values into the matching form columns (by header name)
+    const row     = new Array(headers.length).fill('');
+    const tsCol   = findCol(headers, 'timestamp');
+    const urlCol  = findCol(headers, 'url', 'link');
+    const noteCol = findCol(headers, 'notes');
+    const imgCol  = findCol(headers, 'upload image', 'image instead', 'image', 'photo', 'picture', 'file upload');
+    const nameCol = findCol(headers, 'submitted by', 'your name', 'submitter', 'name');
+
+    if (tsCol   !== -1) row[tsCol]   = new Date();
+    if (urlCol  !== -1) row[urlCol]  = url;
+    if (noteCol !== -1) row[noteCol] = notes;
+    if (imgCol  !== -1 && imageUrl) row[imgCol] = imageUrl;
+    if (nameCol !== -1) row[nameCol] = name;
+
+    rawSheet.appendRow(row);
+    SpreadsheetApp.flush();
+
+    // Process immediately (programmatic appends don't fire the onFormSubmit trigger).
+    // Wrapped so a processing hiccup never fails the submission — the row is saved
+    // and the weekly/manual run will still pick it up.
+    try { processNewSubmissions(); } catch (err) { Logger.log('post-submit processing failed: ' + err); }
+
+    return jsonOut({ ok: true });
+  } catch (err) {
+    Logger.log('doPost error: ' + err);
+    return jsonOut({ ok: false, error: String(err) });
+  }
+}
+
+function jsonOut(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+}
+
+function saveBase64ToDrive(dataUrlOrBase64, name, mimeType) {
+  // Accept either a data URL ("data:image/jpeg;base64,...") or raw base64
+  let raw = dataUrlOrBase64;
+  const comma = dataUrlOrBase64.indexOf(',');
+  if (comma !== -1 && dataUrlOrBase64.substring(0, comma).indexOf('base64') !== -1) {
+    raw = dataUrlOrBase64.substring(comma + 1);
+  }
+  const blob = Utilities.newBlob(Utilities.base64Decode(raw), mimeType, name);
+  return getSubmitFolder().createFile(blob).getUrl();
+}
+
+function getSubmitFolder() {
+  const FOLDER = "What's Going On Submissions";
+  const it = DriveApp.getFoldersByName(FOLDER);
+  return it.hasNext() ? it.next() : DriveApp.createFolder(FOLDER);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // MANUAL HELPERS
 // ═══════════════════════════════════════════════════════════════════════════
 
