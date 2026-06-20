@@ -123,11 +123,11 @@ export default function EventSection({ title, events, emptyMessage, showDateHead
               <div key={group.date}>
                 {/* Date sub-header — shown when there are multiple days in the section */}
                 {showDateHeaders && dateInfo && (
-                  <div className="flex items-center gap-3 mb-2.5">
-                    <span className="text-sm font-semibold text-stone-700">
-                      {dateInfo.weekday}, {dateInfo.month} {dateInfo.day}
-                    </span>
-                    <div className="flex-1 h-px bg-stone-200" />
+                  <div className="flex items-baseline gap-3 mb-3">
+                    <h3 className="text-lg font-bold tracking-tight" style={{ color: '#1C3D55' }}>
+                      {dateInfo.full}
+                    </h3>
+                    <div className="flex-1 h-px" style={{ backgroundColor: '#A8C8D4' }} />
                   </div>
                 )}
 
