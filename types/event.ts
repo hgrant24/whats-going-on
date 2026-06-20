@@ -36,6 +36,7 @@ export interface Event {
   imageUrl: string | null;
   notes: string | null;
   submittedBy: string | null;
+  location: string | null; // hub the event belongs to (e.g. "Bristol", "Sagamore Beach")
 }
 
 export interface GroupedEvents {
@@ -59,7 +60,7 @@ export interface EventsData {
 }
 
 export interface Filters {
-  town: Town;
+  town: string; // dynamic — options derived from the events in the current hub
   category: CategoryFilter;
   search: string;
 }

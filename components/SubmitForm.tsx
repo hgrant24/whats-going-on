@@ -13,15 +13,24 @@ function fileToDataUrl(file: File): Promise<string> {
   });
 }
 
+interface LocationOption {
+  slug: string;
+  name: string;
+  region: string;
+}
+
 interface Props {
   endpoint: string;
   formUrl?: string;
+  locations: LocationOption[];
+  initialLocation: string; // hub name to preselect
 }
 
-export default function SubmitForm({ endpoint, formUrl }: Props) {
+export default function SubmitForm({ endpoint, formUrl, locations, initialLocation }: Props) {
   const [url, setUrl] = useState('');
   const [notes, setNotes] = useState('');
   const [name, setName] = useState('');
+  const [location, setLocation] = useState(initialLocation);
   const [file, setFile] = useState<File | null>(null);
   const [status, setStatus] = useState<'idle' | 'submitting' | 'success' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState('');
@@ -48,6 +57,7 @@ export default function SubmitForm({ endpoint, formUrl }: Props) {
       body.set('url', url.trim());
       body.set('notes', notes.trim());
       body.set('name', name.trim());
+      body.set('location', location);
       if (file) {
         body.set('imageData', await fileToDataUrl(file));
         body.set('imageName', file.name);
@@ -86,6 +96,22 @@ export default function SubmitForm({ endpoint, formUrl }: Props) {
 
   return (
     <form onSubmit={handleSubmit} className="bg-white border border-stone-200 rounded-xl p-6 flex flex-col gap-4">
+      {locations.length > 1 && (
+        <div>
+          <label className="block text-sm font-medium text-stone-700 mb-1">Area</label>
+          <select
+            value={location}
+            onChange={e => setLocation(e.target.value)}
+            className={inputClass}
+          >
+            {locations.map(l => (
+              <option key={l.slug} value={l.name}>{l.name} — {l.region}</option>
+            ))}
+          </select>
+          <p className="mt-1 text-xs text-stone-400">Which area is this event in?</p>
+        </div>
+      )}
+
       <div>
         <label className="block text-sm font-medium text-stone-700 mb-1">
           Event link <span className="font-normal text-stone-400">(optional)</span>

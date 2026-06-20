@@ -8,15 +8,7 @@ import SubmitEventCTA from './SubmitEventCTA';
 
 function filterEvents(events: Event[], filters: Filters): Event[] {
   return events.filter(event => {
-    if (filters.town !== 'All') {
-      const town = event.town.toLowerCase();
-      if (filters.town === 'Other') {
-        const known = ['bristol', 'warren', 'providence', 'newport'];
-        if (known.some(t => town.includes(t))) return false;
-      } else if (!town.includes(filters.town.toLowerCase())) {
-        return false;
-      }
-    }
+    if (filters.town !== 'All' && event.town !== filters.town) return false;
     if (filters.category !== 'All' && event.category !== filters.category) return false;
     if (filters.search) {
       const q = filters.search.toLowerCase();
@@ -33,9 +25,11 @@ interface Props {
   grouped: GroupedEvents;
   rawSubmissions: RawSubmission[];
   hasApprovedTab: boolean;
+  submitHref?: string;
+  areaName?: string;
 }
 
-export default function EventsClient({ grouped, rawSubmissions, hasApprovedTab }: Props) {
+export default function EventsClient({ grouped, rawSubmissions, hasApprovedTab, submitHref = '/submit', areaName }: Props) {
   const [filters, setFilters] = useState<Filters>({ town: 'All', category: 'All', search: '' });
 
   const filtered = useMemo<GroupedEvents>(
@@ -47,6 +41,15 @@ export default function EventsClient({ grouped, rawSubmissions, hasApprovedTab }
     }),
     [grouped, filters]
   );
+
+  // Town options derived from the events actually present in this hub
+  const towns = useMemo(() => {
+    const set = new Set<string>();
+    [grouped.tonight, grouped.thisWeek, grouped.upcoming, grouped.recurring].forEach(arr =>
+      arr.forEach(e => { if (e.town && e.town.trim()) set.add(e.town.trim()); })
+    );
+    return ['All', ...Array.from(set).sort()];
+  }, [grouped]);
 
   const totalFiltered =
     filtered.tonight.length + filtered.thisWeek.length + filtered.upcoming.length + filtered.recurring.length;
@@ -63,7 +66,7 @@ export default function EventsClient({ grouped, rawSubmissions, hasApprovedTab }
     <div className="flex flex-col gap-6">
       {/* Only show filters when there are structured events to filter */}
       {hasApprovedTab && totalAll > 0 && (
-        <EventFilters filters={filters} onChange={setFilters} totalResults={totalFiltered} />
+        <EventFilters filters={filters} onChange={setFilters} totalResults={totalFiltered} towns={towns} />
       )}
 
       {/* Structured events (Approved Events tab) */}
@@ -92,9 +95,9 @@ export default function EventsClient({ grouped, rawSubmissions, hasApprovedTab }
       {/* True empty state */}
       {!hasAnything && (
         <div className="text-center py-12 text-stone-400">
-          <p className="text-base">Nothing listed yet — check back soon or</p>
+          <p className="text-base">Nothing listed here yet — check back soon or</p>
           <p className="mt-1">
-            <a href="/submit" className="text-teal-600 hover:underline font-medium">
+            <a href={submitHref} className="text-teal-600 hover:underline font-medium">
               submit an event
             </a>
             .
@@ -102,7 +105,7 @@ export default function EventsClient({ grouped, rawSubmissions, hasApprovedTab }
         </div>
       )}
 
-      <SubmitEventCTA />
+      <SubmitEventCTA href={submitHref} areaName={areaName} />
     </div>
   );
 }

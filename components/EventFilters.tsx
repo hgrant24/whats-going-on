@@ -1,14 +1,15 @@
 'use client';
 
-import { CATEGORIES, TOWNS, Filters, CategoryFilter, Town } from '@/types/event';
+import { CATEGORIES, Filters, CategoryFilter } from '@/types/event';
 
 interface Props {
   filters: Filters;
   onChange: (f: Filters) => void;
   totalResults: number;
+  towns: string[]; // dynamic list derived from the current hub's events
 }
 
-export default function EventFilters({ filters, onChange, totalResults }: Props) {
+export default function EventFilters({ filters, onChange, totalResults, towns }: Props) {
   const hasActiveFilters =
     filters.town !== 'All' || filters.category !== 'All' || filters.search !== '';
 
@@ -25,15 +26,17 @@ export default function EventFilters({ filters, onChange, totalResults }: Props)
 
       {/* Town + Category */}
       <div className="flex gap-2 flex-wrap">
-        <select
-          value={filters.town}
-          onChange={e => onChange({ ...filters, town: e.target.value as Town })}
-          className="text-sm border border-stone-200 rounded-lg px-2.5 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-teal-400 text-stone-700"
-        >
-          {TOWNS.map(t => (
-            <option key={t} value={t}>{t === 'All' ? 'All Towns' : t}</option>
-          ))}
-        </select>
+        {towns.length > 1 && (
+          <select
+            value={filters.town}
+            onChange={e => onChange({ ...filters, town: e.target.value })}
+            className="text-sm border border-stone-200 rounded-lg px-2.5 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-teal-400 text-stone-700"
+          >
+            {towns.map(t => (
+              <option key={t} value={t}>{t === 'All' ? 'All Towns' : t}</option>
+            ))}
+          </select>
+        )}
 
         <select
           value={filters.category}

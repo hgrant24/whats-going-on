@@ -1,18 +1,22 @@
 import Header from '@/components/Header';
 import Link from 'next/link';
 import SubmitForm from '@/components/SubmitForm';
+import { LOCATIONS, DEFAULT_LOCATION, getLocationBySlug } from '@/lib/locations';
 
 export const metadata = {
   title: 'Submit an Event',
 };
 
-export default function SubmitPage() {
+export default function SubmitPage({ searchParams }: { searchParams: { loc?: string } }) {
   const formUrl = process.env.NEXT_PUBLIC_GOOGLE_FORM_URL;
   const endpoint = process.env.NEXT_PUBLIC_SUBMIT_ENDPOINT;
 
+  const current = (searchParams.loc && getLocationBySlug(searchParams.loc)) || DEFAULT_LOCATION;
+  const locationOptions = LOCATIONS.map(l => ({ slug: l.slug, name: l.name, region: l.region }));
+
   return (
     <>
-      <Header />
+      <Header currentSlug={current.slug} />
       <main className="max-w-2xl mx-auto px-4 py-12">
         <Link href="/" className="text-sm text-stone-400 hover:text-[#5B9BAE] transition-colors mb-6 inline-block">
           ← Back to events
@@ -20,13 +24,18 @@ export default function SubmitPage() {
 
         <h1 className="text-2xl font-bold text-stone-900 mb-3">Submit an event</h1>
         <p className="text-stone-500 leading-relaxed mb-6">
-          Know something happening around Bristol or the East Bay? Drop a link, a few details, or a
-          photo of a flyer — we&apos;ll read it and add it to the feed. All kinds of events welcome:
-          trivia, live music, markets, sports, fundraisers, family events, and more.
+          Know something happening locally? Drop a link, a few details, or a photo of a flyer —
+          we&apos;ll read it and add it to the feed. All kinds of events welcome: trivia, live music,
+          markets, sports, fundraisers, family events, and more.
         </p>
 
         {endpoint ? (
-          <SubmitForm endpoint={endpoint} formUrl={formUrl} />
+          <SubmitForm
+            endpoint={endpoint}
+            formUrl={formUrl}
+            locations={locationOptions}
+            initialLocation={current.name}
+          />
         ) : (
           // Fallback until NEXT_PUBLIC_SUBMIT_ENDPOINT is configured
           <div className="bg-white border border-stone-200 rounded-xl p-6 flex flex-col gap-4">

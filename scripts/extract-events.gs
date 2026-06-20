@@ -40,7 +40,7 @@ const APPROVED_HEADERS = [
   'Recurring?','Recurrence rule','Description',
   'Source link','Last verified','Tags',
   'Cost','Age friendly?','Outdoor?',
-  'Image URL','Submitted by',
+  'Image URL','Submitted by','Location',
 ];
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -272,7 +272,8 @@ function fetchDriveImageAsBase64(fileId) {
 // CLAUDE API
 // ═══════════════════════════════════════════════════════════════════════════
 
-function buildPrompt(pageText, sourceUrl, isRetry) {
+function buildPrompt(pageText, sourceUrl, isRetry, defaultTown) {
+  const town       = defaultTown || DEFAULT_TOWN;
   const tz         = 'America/New_York';
   const today      = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
   const year       = today.substring(0, 4);
@@ -283,7 +284,7 @@ function buildPrompt(pageText, sourceUrl, isRetry) {
     ? '\n\nIMPORTANT: The content clearly contains event listings. You MUST extract each event title and its date/time. Do NOT return [] unless there are truly zero event title + date pairs.'
     : '';
 
-  return `You extract events from venue/restaurant websites for a local events guide in Bristol and the East Bay of Rhode Island.
+  return `You extract events from venue/restaurant websites for a local community events guide for the ${town} area.
 
 Today: ${today} (year: ${year}). Extract events from ${today} through ${endDateStr}.
 
@@ -299,14 +300,14 @@ Rules:
 - YEAR: dates with only month+day — use ${year} unless that date already passed, then use ${parseInt(year) + 1}.
 - Skip any one-time event whose date is before ${today}. Include today's events.
 - ORDER the output chronologically, SOONEST upcoming events FIRST. If the page has a very large number of events (e.g. a long concert series), prioritize the next ~8 weeks — list those first so the most relevant upcoming events are never dropped.
-- Infer venue name from page title or context if not explicit. Default town: Bristol.
+- Infer venue name from page title or context if not explicit. Default town: ${town}.
 - Cost: "Free", "$X", or empty string.${retryNote}
 
 Return ONLY a JSON array, no markdown, no prose. Schema per object:
 {
   "name": "event title",
   "venue": "establishment name",
-  "town": "Bristol | Warren | Providence | Newport | Other",
+  "town": "specific town or neighborhood, e.g. ${town}",
   "category": "Trivia | Live Music | Food/Drink | Sports/League | Market | Family | Comedy | Arts/Culture | Other",
   "startDate": "YYYY-MM-DD (one-time events only, else empty)",
   "weekday": "Monday..Sunday (recurring weekly events only, else empty)",
@@ -322,7 +323,8 @@ Return ONLY a JSON array, no markdown, no prose. Schema per object:
 If no events found after genuinely searching, return [].`;
 }
 
-function buildImagePrompt(sourceLabel) {
+function buildImagePrompt(sourceLabel, defaultTown) {
+  const town       = defaultTown || DEFAULT_TOWN;
   const tz         = 'America/New_York';
   const today      = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
   const year       = today.substring(0, 4);
@@ -330,7 +332,7 @@ function buildImagePrompt(sourceLabel) {
   endDate.setMonth(endDate.getMonth() + MONTHS_AHEAD);
   const endDateStr = Utilities.formatDate(endDate, tz, 'yyyy-MM-dd');
 
-  return `You extract events from photos of chalkboards, event posters, flyers, menus, and signage for a local events guide in Bristol and the East Bay of Rhode Island.
+  return `You extract events from photos of chalkboards, event posters, flyers, menus, and signage for a local community events guide for the ${town} area.
 
 Today: ${today} (year: ${year}). Extract events from ${today} through ${endDateStr}.
 
@@ -347,14 +349,14 @@ Rules:
 - For ONE-TIME events with a specific date, set startDate and leave weekday empty.
 - YEAR: if only month+day shown, use ${year} unless past, then ${parseInt(year) + 1}.
 - Skip any one-time event whose date is before ${today}. ORDER the output soonest upcoming first.
-- Infer venue from any logos/name visible in the image. Default town: Bristol.
+- Infer venue from any logos/name visible in the image. Default town: ${town}.
 - Cost: "Free", "$X", or empty string.
 
 Return ONLY a JSON array, no markdown, no prose. Schema per object:
 {
   "name": "event title",
   "venue": "establishment name",
-  "town": "Bristol | Warren | Providence | Newport | Other",
+  "town": "specific town or neighborhood, e.g. ${town}",
   "category": "Trivia | Live Music | Food/Drink | Sports/League | Market | Family | Comedy | Arts/Culture | Other",
   "startDate": "YYYY-MM-DD (one-time events only, else empty)",
   "weekday": "Monday..Sunday (recurring weekly events only, else empty)",
@@ -435,7 +437,7 @@ function extractJsonArray(text) {
 }
 
 /** Extract events from a fetched page text */
-function callClaude(pageText, sourceUrl) {
+function callClaude(pageText, sourceUrl, defaultTown) {
   const chunks = extractEventChunks(pageText);
   let textToSend = pageText;
   if (chunks.length > 0) {
@@ -447,7 +449,7 @@ function callClaude(pageText, sourceUrl) {
     model: CLAUDE_MODEL,
     max_tokens: 8192,
     messages: [
-      { role: 'user', content: buildPrompt(textToSend, sourceUrl, false) },
+      { role: 'user', content: buildPrompt(textToSend, sourceUrl, false, defaultTown) },
       { role: 'assistant', content: '[' },
     ],
   });
@@ -460,7 +462,7 @@ function callClaude(pageText, sourceUrl) {
       model: CLAUDE_MODEL,
       max_tokens: 8192,
       messages: [
-        { role: 'user', content: buildPrompt(textToSend, sourceUrl, true) },
+        { role: 'user', content: buildPrompt(textToSend, sourceUrl, true, defaultTown) },
         { role: 'assistant', content: '[' },
       ],
     });
@@ -470,20 +472,20 @@ function callClaude(pageText, sourceUrl) {
 }
 
 /** Extract events from pasted notes text */
-function callClaudeWithNotes(notes, sourceLabel) {
+function callClaudeWithNotes(notes, sourceLabel, defaultTown) {
   Logger.log('  Sending notes text to Claude (' + notes.length + ' chars)');
   return callClaudeApi({
     model: CLAUDE_MODEL,
     max_tokens: 8192,
     messages: [
-      { role: 'user', content: buildPrompt(notes, sourceLabel + ' (pasted notes)', false) },
+      { role: 'user', content: buildPrompt(notes, sourceLabel + ' (pasted notes)', false, defaultTown) },
       { role: 'assistant', content: '[' },
     ],
   });
 }
 
 /** Extract events from a Drive image (chalkboard / poster photo) */
-function callClaudeWithImage(base64, mimeType, sourceLabel) {
+function callClaudeWithImage(base64, mimeType, sourceLabel, defaultTown) {
   Logger.log('  Sending image to Claude Vision (' + mimeType + ')');
   return callClaudeApi({
     model: CLAUDE_MODEL,
@@ -493,7 +495,7 @@ function callClaudeWithImage(base64, mimeType, sourceLabel) {
         role: 'user',
         content: [
           { type: 'image', source: { type: 'base64', media_type: mimeType, data: base64 } },
-          { type: 'text', text: buildImagePrompt(sourceLabel) },
+          { type: 'text', text: buildImagePrompt(sourceLabel, defaultTown) },
         ],
       },
       { role: 'assistant', content: '[' },
@@ -571,10 +573,11 @@ function expandRecurringEvents(events) {
   return out;
 }
 
-function writeEvents(approvedSheet, events, sourceUrl, submittedBy, existingKeys) {
-  const tz      = 'America/New_York';
-  const today   = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
-  const cutoff  = Utilities.formatDate(new Date(Date.now() - 86400000), tz, 'yyyy-MM-dd');
+function writeEvents(approvedSheet, events, sourceUrl, submittedBy, existingKeys, location) {
+  const tz          = 'America/New_York';
+  const today       = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+  const cutoff      = Utilities.formatDate(new Date(Date.now() - 86400000), tz, 'yyyy-MM-dd');
+  const townDefault = (location || DEFAULT_TOWN).trim();
   let added = 0;
 
   for (const e of events) {
@@ -589,7 +592,7 @@ function writeEvents(approvedSheet, events, sourceUrl, submittedBy, existingKeys
     approvedSheet.appendRow([
       (e.name            || '').trim(),
       (e.venue           || '').trim(),
-      (e.town            || DEFAULT_TOWN).trim(),
+      (e.town            || townDefault).trim(),
       (e.category        || 'Other').trim(),
       e.startDate        || '',
       e.startTime        || '',
@@ -605,6 +608,7 @@ function writeEvents(approvedSheet, events, sourceUrl, submittedBy, existingKeys
       e.outdoor     === true ? 'Yes' : e.outdoor     === false ? 'No' : '',
       '',
       (submittedBy       || '').trim(),
+      (location          || '').trim(),
     ]);
     added++;
   }
@@ -643,8 +647,10 @@ function processNewSubmissions() {
   const notesCol      = findCol(headers, 'notes');
   const imageCol      = findCol(headers, 'upload image', 'image instead', 'image', 'photo', 'picture', 'file upload');
   const submittedByCol = findCol(headers, 'submitted by', 'your name', 'submitter', 'name');
+  const locationCol    = findCol(headers, 'location', 'hub', 'area');
 
-  Logger.log('Columns — url:' + urlCol + ' notes:' + notesCol + ' image:' + imageCol + ' submittedBy:' + submittedByCol);
+  Logger.log('Columns — url:' + urlCol + ' notes:' + notesCol + ' image:' + imageCol +
+    ' submittedBy:' + submittedByCol + ' location:' + locationCol);
 
   const existingKeys = buildExistingKeys(approvedSheet);
   const tz           = 'America/New_York';
@@ -656,6 +662,8 @@ function processNewSubmissions() {
     const notes       = notesCol       !== -1 ? (data[row][notesCol]       || '').toString().trim() : '';
     const imageValue  = imageCol       !== -1 ? (data[row][imageCol]       || '').toString().trim() : '';
     const submittedBy = submittedByCol !== -1 ? (data[row][submittedByCol] || '').toString().trim() : '';
+    const location    = locationCol    !== -1 ? (data[row][locationCol]    || '').toString().trim() : '';
+    const townHint    = location || DEFAULT_TOWN;
     const status      = (data[row][processedCol - 1] || '').toString().trim();
 
     // Need at least one input
@@ -677,7 +685,7 @@ function processNewSubmissions() {
       if (url) {
         const pageText = fetchPageText(url);
         if (pageText) {
-          const ev = callClaude(pageText, url);
+          const ev = callClaude(pageText, url, townHint);
           Logger.log('  URL → ' + ev.length + ' events');
           allEvents = allEvents.concat(ev);
         } else {
@@ -688,7 +696,7 @@ function processNewSubmissions() {
       // 2. Notes → extract if it looks like a schedule
       if (notes && looksLikeEventSchedule(notes)) {
         Utilities.sleep(1000);
-        const ev = callClaudeWithNotes(notes, url || 'Pasted schedule');
+        const ev = callClaudeWithNotes(notes, url || 'Pasted schedule', townHint);
         Logger.log('  Notes → ' + ev.length + ' events');
         allEvents = allEvents.concat(ev);
       }
@@ -703,7 +711,7 @@ function processNewSubmissions() {
           const img = fetchDriveImageAsBase64(fileId);
           if (!img) continue;
           Utilities.sleep(1000);
-          const ev = callClaudeWithImage(img.base64, img.mimeType, url || 'Uploaded image');
+          const ev = callClaudeWithImage(img.base64, img.mimeType, url || 'Uploaded image', townHint);
           Logger.log('  Image → ' + ev.length + ' events');
           allEvents = allEvents.concat(ev);
         }
@@ -721,7 +729,7 @@ function processNewSubmissions() {
       const expanded = expandRecurringEvents(allEvents);
       Logger.log('  Expanded ' + allEvents.length + ' → ' + expanded.length + ' dated rows');
 
-      const added = writeEvents(approvedSheet, expanded, url || imageValue || 'manual', submittedBy, existingKeys);
+      const added = writeEvents(approvedSheet, expanded, url || imageValue || 'manual', submittedBy, existingKeys, location);
       totalAdded += added;
       rawSheet.getRange(row + 1, processedCol).setValue('done — ' + added + ' events added ' + today);
     } catch (err) {
@@ -806,9 +814,10 @@ function doGet() {
 function doPost(e) {
   try {
     const p = (e && e.parameter) ? e.parameter : {};
-    const url   = (p.url   || '').toString().trim();
-    const notes = (p.notes || '').toString().trim();
-    const name  = (p.name  || '').toString().trim();
+    const url      = (p.url      || '').toString().trim();
+    const notes    = (p.notes    || '').toString().trim();
+    const name     = (p.name     || '').toString().trim();
+    const location = (p.location || '').toString().trim();
 
     if (!url && !notes && !p.imageData) {
       return jsonOut({ ok: false, error: 'Empty submission' });
@@ -822,6 +831,7 @@ function doPost(e) {
 
     const ss       = SpreadsheetApp.getActiveSpreadsheet();
     const rawSheet  = getRawSheet(ss);
+    ensureRawColumn(rawSheet, 'Location'); // make sure the raw sheet can hold the hub
     const headers   = rawSheet.getRange(1, 1, 1, Math.max(rawSheet.getLastColumn(), 1)).getValues()[0];
 
     // Place values into the matching form columns (by header name)
@@ -831,12 +841,14 @@ function doPost(e) {
     const noteCol = findCol(headers, 'notes');
     const imgCol  = findCol(headers, 'upload image', 'image instead', 'image', 'photo', 'picture', 'file upload');
     const nameCol = findCol(headers, 'submitted by', 'your name', 'submitter', 'name');
+    const locCol  = findCol(headers, 'location', 'hub', 'area');
 
     if (tsCol   !== -1) row[tsCol]   = new Date();
     if (urlCol  !== -1) row[urlCol]  = url;
     if (noteCol !== -1) row[noteCol] = notes;
     if (imgCol  !== -1 && imageUrl) row[imgCol] = imageUrl;
     if (nameCol !== -1) row[nameCol] = name;
+    if (locCol  !== -1) row[locCol]  = location;
 
     rawSheet.appendRow(row);
     SpreadsheetApp.flush();
@@ -851,6 +863,15 @@ function doPost(e) {
     Logger.log('doPost error: ' + err);
     return jsonOut({ ok: false, error: String(err) });
   }
+}
+
+function ensureRawColumn(sheet, header) {
+  const headers = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 1)).getValues()[0];
+  const idx = headers.findIndex(h => h.toString().trim().toLowerCase() === header.toLowerCase());
+  if (idx !== -1) return idx + 1;
+  const col = sheet.getLastColumn() + 1;
+  sheet.getRange(1, col).setValue(header).setFontWeight('bold');
+  return col;
 }
 
 function jsonOut(obj) {
