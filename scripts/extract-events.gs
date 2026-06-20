@@ -207,24 +207,37 @@ If no events found, return [].`;
   const body = JSON.parse(resp.getContentText());
   if (body.error) throw new Error('Claude error: ' + body.error.message);
 
-  // Prepend the '[' we used as the prefill, then parse
-  const raw = '[' + body.content[0].text.trim();
-  Logger.log('Claude raw response (first 300 chars): ' + raw.substring(0, 300));
+  const continuation = body.content[0].text.trim();
+  Logger.log('Claude continuation (first 400 chars):\n' + continuation.substring(0, 400));
 
-  try {
-    return JSON.parse(raw);
-  } catch (e) {
-    // Last-resort: find the array boundaries
-    const start = raw.indexOf('[');
-    const end = raw.lastIndexOf(']');
-    if (start !== -1 && end > start) {
-      try {
-        return JSON.parse(raw.slice(start, end + 1));
-      } catch (_) {}
+  return extractJsonArray(continuation);
+}
+
+function extractJsonArray(text) {
+  // Strategy 1: prepend '[' from our prefill (normal case — Claude outputs the rest of the array)
+  // Strategy 2: text already starts with '[' (Claude echoed the bracket)
+  // Strategy 3: strip markdown fences then try again
+  // Strategy 4: find first '[' and last ']' anywhere in the text
+  const candidates = [
+    '[' + text,
+    text,
+    text.replace(/^```json?\s*/i, '').replace(/\s*```$/i, '').trim(),
+  ];
+
+  for (const candidate of candidates) {
+    // Direct parse
+    try { return JSON.parse(candidate); } catch (_) {}
+
+    // Slice from first '[' to last ']'
+    const s = candidate.indexOf('[');
+    const e = candidate.lastIndexOf(']');
+    if (s !== -1 && e > s) {
+      try { return JSON.parse(candidate.slice(s, e + 1)); } catch (_) {}
     }
-    Logger.log('Full Claude response:\n' + raw);
-    throw new Error('Could not parse Claude response as JSON. Check Execution Log for raw output.');
   }
+
+  Logger.log('All JSON parse strategies failed. Full text:\n' + text);
+  throw new Error('Could not parse Claude response as JSON. Open View → Logs to see what Claude returned.');
 }
 
 // ─── Write events ─────────────────────────────────────────────────────────────
@@ -435,8 +448,8 @@ function runNow() {
 }
 
 function resetErrors() {
-  // Clears only "error: ..." rows so they'll be re-processed.
-  _resetRows(status => status.startsWith('error'));
+  // Clears "error: ..." and stuck "processing..." rows so they'll be re-processed.
+  _resetRows(status => status.startsWith('error') || status.startsWith('processing'));
 }
 
 function resetAll() {
