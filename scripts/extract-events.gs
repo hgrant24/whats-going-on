@@ -907,8 +907,18 @@ function resetErrors() { _resetRows(s => s.startsWith('error') || isStuckProcess
 function resetEmpty()  { _resetRows(s => /0 events/i.test(s)); }
 
 // ── One-time migration: tag every existing Approved Events row with its hub ──
-// Maps by the event's Source link domain. Anything not listed → Bristol.
-// Safe to re-run anytime (e.g. after adding more domains). Run: backfillLocations
+// Classifies by TOWN first (most reliable), then by Source-link domain for rows
+// whose town is "Other"/blank. Anything unmatched → Bristol (the default hub).
+// Safe to re-run anytime. Add towns/domains below as you grow. Run: backfillLocations
+const SAGAMORE_TOWNS = [
+  'sagamore beach','sagamore','bourne','buzzards bay','onset','sandwich','plymouth',
+  'hyannis','barnstable','falmouth','mashpee','yarmouth','dennis','wareham','marion',
+  'mattapoisett','new bedford','cape cod',
+];
+const BRISTOL_TOWNS = [
+  'bristol','warren','barrington','tiverton','little compton','newport','portsmouth',
+  'middletown','jamestown','providence','east providence','riverside',
+];
 const HUB_BY_DOMAIN = {
   'gpubrestaurants.com':      'Sagamore Beach',
   'eastbaygrille.com':        'Sagamore Beach',
@@ -916,20 +926,28 @@ const HUB_BY_DOMAIN = {
   'ciscokitchenbar.com':      'Sagamore Beach',
 };
 
+function hubForRow(town, src) {
+  const t = (town || '').toString().toLowerCase();
+  if (SAGAMORE_TOWNS.some(x => t.indexOf(x) !== -1)) return 'Sagamore Beach';
+  if (BRISTOL_TOWNS.some(x => t.indexOf(x) !== -1))  return 'Bristol';
+  const s = (src || '').toString().toLowerCase();
+  for (const dom in HUB_BY_DOMAIN) { if (s.indexOf(dom) !== -1) return HUB_BY_DOMAIN[dom]; }
+  return 'Bristol';
+}
+
 function backfillLocations() {
-  const ss     = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet  = getOrCreateApprovedSheet(ss); // reconciles header → ensures Location column
-  const data   = sheet.getDataRange().getValues();
+  const ss      = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet   = getOrCreateApprovedSheet(ss); // reconciles header → ensures Location column
+  const data    = sheet.getDataRange().getValues();
   const headers = data[0];
-  const srcCol = headers.findIndex(h => h.toString().trim().toLowerCase() === 'source link');
-  const locCol = headers.findIndex(h => h.toString().trim().toLowerCase() === 'location');
+  const townCol = headers.findIndex(h => h.toString().trim().toLowerCase() === 'town');
+  const srcCol  = headers.findIndex(h => h.toString().trim().toLowerCase() === 'source link');
+  const locCol  = headers.findIndex(h => h.toString().trim().toLowerCase() === 'location');
   if (locCol === -1) { Logger.log('No Location column found — re-paste the latest script.'); return; }
 
   const counts = {};
   for (let i = 1; i < data.length; i++) {
-    const src = (data[i][srcCol] || '').toString().toLowerCase();
-    let hub = 'Bristol';
-    for (const dom in HUB_BY_DOMAIN) { if (src.indexOf(dom) !== -1) { hub = HUB_BY_DOMAIN[dom]; break; } }
+    const hub = hubForRow(data[i][townCol], data[i][srcCol]);
     sheet.getRange(i + 1, locCol + 1).setValue(hub);
     counts[hub] = (counts[hub] || 0) + 1;
   }
