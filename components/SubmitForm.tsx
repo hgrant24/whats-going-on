@@ -87,12 +87,14 @@ export default function SubmitForm({ endpoint, formUrl }: Props) {
   return (
     <form onSubmit={handleSubmit} className="bg-white border border-stone-200 rounded-xl p-6 flex flex-col gap-4">
       <div>
-        <label className="block text-sm font-medium text-stone-700 mb-1">Event link</label>
+        <label className="block text-sm font-medium text-stone-700 mb-1">
+          Event link <span className="font-normal text-stone-400">(optional)</span>
+        </label>
         <input
           type="url"
           value={url}
           onChange={e => setUrl(e.target.value)}
-          placeholder="Facebook event, website, Instagram post…"
+          placeholder="Website, Eventbrite, or event listing…"
           className={inputClass}
         />
       </div>
@@ -125,7 +127,7 @@ export default function SubmitForm({ endpoint, formUrl }: Props) {
 
       <div>
         <label className="block text-sm font-medium text-stone-700 mb-1">
-          Photo of a flyer or chalkboard <span className="font-normal text-stone-400">(optional)</span>
+          Photo of a local flyer, chalkboard, or screenshot from social <span className="font-normal text-stone-400">(optional)</span>
         </label>
         <input
           type="file"

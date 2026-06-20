@@ -31,9 +31,9 @@ export default function SubmitPage() {
           // Fallback until NEXT_PUBLIC_SUBMIT_ENDPOINT is configured
           <div className="bg-white border border-stone-200 rounded-xl p-6 flex flex-col gap-4">
             <p className="text-sm text-stone-600 leading-relaxed">
-              Drop a link to the event listing — Facebook event, website, Eventbrite, Instagram
-              post, anywhere — along with any extra details you have. We review submissions and add
-              them to the site within a day or two.
+              Drop a link to the event listing — a website, Eventbrite, or venue page — along with
+              any extra details you have. We review submissions and add them to the site within a
+              day or two.
             </p>
             {formUrl ? (
               <a
