@@ -28,6 +28,20 @@ export const LOCATIONS: LocationDef[] = [
     blurb:
       'A simple local guide to trivia, live music, markets, food events, and things happening around Sagamore Beach and the Upper Cape.',
   },
+  {
+    slug: 'somerville',
+    name: 'Somerville',
+    region: 'Greater Boston, MA',
+    blurb:
+      'A simple local guide to trivia, live music, markets, food events, and things happening around Somerville and Greater Boston.',
+  },
+  {
+    slug: 'saratoga',
+    name: 'Saratoga',
+    region: 'Saratoga Springs, NY',
+    blurb:
+      'A simple local guide to trivia, live music, markets, food events, and things happening around Saratoga Springs.',
+  },
 ];
 
 export const DEFAULT_LOCATION: LocationDef =
