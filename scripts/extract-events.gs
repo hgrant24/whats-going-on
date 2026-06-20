@@ -435,8 +435,16 @@ function runNow() {
 }
 
 function resetErrors() {
-  // Clears "error: ..." status on any rows so they'll be re-processed on next run.
-  // Select this and hit Run whenever you want to retry failed rows.
+  // Clears only "error: ..." rows so they'll be re-processed.
+  _resetRows(status => status.startsWith('error'));
+}
+
+function resetAll() {
+  // Clears ALL processed statuses (errors, done, done-0, recheck) — re-processes every URL.
+  _resetRows(() => true);
+}
+
+function _resetRows(predicate) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const rawSheet = getRawSheet(ss);
   const processedCol = getOrAddProcessedCol(rawSheet);
@@ -444,10 +452,10 @@ function resetErrors() {
   let cleared = 0;
   for (let row = 1; row < data.length; row++) {
     const status = (data[row][processedCol - 1] || '').toString().trim();
-    if (status.startsWith('error')) {
+    if (status && predicate(status)) {
       rawSheet.getRange(row + 1, processedCol).setValue('');
       cleared++;
     }
   }
-  Logger.log('Cleared ' + cleared + ' error rows. Run runNow() to retry them.');
+  Logger.log('Cleared ' + cleared + ' rows. Run runNow() to re-process them.');
 }
