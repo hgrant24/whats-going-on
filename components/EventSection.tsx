@@ -1,6 +1,19 @@
 import { Event } from '@/types/event';
 import { formatEventDate, formatTime } from '@/lib/events';
+import { googleCalendarUrl } from '@/lib/calendar';
 import EventCard from './EventCard';
+
+function CalendarIcon() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="18" rx="2" />
+      <line x1="3" y1="10" x2="21" y2="10" />
+      <line x1="8" y1="2" x2="8" y2="6" />
+      <line x1="16" y1="2" x2="16" y2="6" />
+    </svg>
+  );
+}
 
 const CATEGORY_COLORS: Record<string, string> = {
   'Trivia':        'bg-blue-100 text-blue-700',
@@ -23,22 +36,43 @@ function RecurringTag({ event }: { event: Event }) {
     timeStr ? `· ${timeStr}` : null,
   ].filter(Boolean).join(' ');
 
-  return event.sourceLink ? (
-    <a
-      href={event.sourceLink}
-      target="_blank"
-      rel="noopener noreferrer"
-      className={`inline-flex items-center text-xs font-medium px-2.5 py-1 rounded-full hover:opacity-80 transition-opacity ${colors}`}
-      title={event.description ?? undefined}
-    >
-      {label}
-    </a>
-  ) : (
+  const tooltip = [event.description, event.submittedBy ? `Added by ${event.submittedBy}` : null]
+    .filter(Boolean)
+    .join(' — ') || undefined;
+
+  const calUrl = googleCalendarUrl(event);
+
+  return (
     <span
-      className={`inline-flex items-center text-xs font-medium px-2.5 py-1 rounded-full ${colors}`}
-      title={event.description ?? undefined}
+      className={`inline-flex items-center text-xs font-medium rounded-full ${colors}`}
+      title={tooltip}
     >
-      {label}
+      {event.sourceLink ? (
+        <a
+          href={event.sourceLink}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="pl-2.5 py-1 hover:opacity-80 transition-opacity"
+        >
+          {label}
+        </a>
+      ) : (
+        <span className="pl-2.5 py-1">{label}</span>
+      )}
+      {calUrl ? (
+        <a
+          href={calUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="pl-1.5 pr-2.5 py-1 opacity-50 hover:opacity-100 transition-opacity"
+          title="Add to Google Calendar"
+          aria-label={`Add ${event.name} to Google Calendar`}
+        >
+          <CalendarIcon />
+        </a>
+      ) : (
+        <span className="pr-2.5" />
+      )}
     </span>
   );
 }
@@ -97,20 +131,20 @@ export default function EventSection({ title, events, emptyMessage, showDateHead
                   </div>
                 )}
 
-                {/* One-off events — full cards */}
-                {group.oneOff.length > 0 && (
-                  <div className="flex flex-col gap-3">
-                    {group.oneOff.map(event => (
-                      <EventCard key={event.id} event={event} showDateBadge={false} />
+                {/* Recurring events — colored tag chips, shown FIRST */}
+                {group.recurring.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {group.recurring.map(event => (
+                      <RecurringTag key={event.id} event={event} />
                     ))}
                   </div>
                 )}
 
-                {/* Recurring events — colored tag chips */}
-                {group.recurring.length > 0 && (
-                  <div className={`flex flex-wrap gap-2 ${group.oneOff.length > 0 ? 'mt-2' : ''}`}>
-                    {group.recurring.map(event => (
-                      <RecurringTag key={event.id} event={event} />
+                {/* One-off events — full cards, below the recurring chips */}
+                {group.oneOff.length > 0 && (
+                  <div className={`flex flex-col gap-3 ${group.recurring.length > 0 ? 'mt-3' : ''}`}>
+                    {group.oneOff.map(event => (
+                      <EventCard key={event.id} event={event} showDateBadge={false} />
                     ))}
                   </div>
                 )}

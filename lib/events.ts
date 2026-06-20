@@ -103,6 +103,7 @@ function parseApprovedRows(rows: Record<string, string>[]): Event[] {
         outdoor: parseBoolean(get('outdoor_', 'outdoor', 'outside')) ?? null,
         imageUrl: get('image_url', 'image', 'photo', 'img') || null,
         notes: get('notes', 'additional_notes', 'extra') || null,
+        submittedBy: get('submitted_by', 'submittedby', 'added_by', 'your_name', 'submitter') || null,
       } as Event;
     })
     .filter((e): e is Event => e !== null);

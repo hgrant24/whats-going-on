@@ -1,5 +1,6 @@
 import { Event } from '@/types/event';
 import { formatEventDate, formatTime } from '@/lib/events';
+import { googleCalendarUrl } from '@/lib/calendar';
 
 const CATEGORY_STYLES: Record<string, string> = {
   'Trivia': 'bg-blue-100 text-blue-700',
@@ -34,6 +35,8 @@ export default function EventCard({ event, showDateBadge = true }: Props) {
     : event.isRecurring
     ? 'Recurring'
     : null;
+
+  const calUrl = googleCalendarUrl(event);
 
   return (
     <article className="bg-white rounded-xl border border-stone-200 p-4 flex gap-4 hover:border-teal-300 hover:shadow-sm transition-all">
@@ -112,20 +115,37 @@ export default function EventCard({ event, showDateBadge = true }: Props) {
               {tag}
             </span>
           ))}
-          {event.sourceLink && (
-            <a
-              href={event.sourceLink}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="ml-auto text-xs font-semibold text-teal-600 hover:text-teal-800 transition-colors"
-            >
-              View source →
-            </a>
-          )}
+          <div className="ml-auto flex items-center gap-3">
+            {calUrl && (
+              <a
+                href={calUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs font-semibold hover:opacity-70 transition-opacity"
+                style={{ color: '#5B9BAE' }}
+              >
+                + Calendar
+              </a>
+            )}
+            {event.sourceLink && (
+              <a
+                href={event.sourceLink}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs font-semibold text-teal-600 hover:text-teal-800 transition-colors"
+              >
+                View source →
+              </a>
+            )}
+          </div>
         </div>
 
-        {event.lastVerified && (
-          <p className="mt-1.5 text-[11px] text-stone-400">Verified {event.lastVerified}</p>
+        {(event.submittedBy || event.lastVerified) && (
+          <p className="mt-1.5 text-[11px] text-stone-400">
+            {event.submittedBy && <span>Added by {event.submittedBy}</span>}
+            {event.submittedBy && event.lastVerified && <span className="mx-1">·</span>}
+            {event.lastVerified && <span>Verified {event.lastVerified}</span>}
+          </p>
         )}
       </div>
     </article>

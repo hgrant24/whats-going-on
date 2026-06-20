@@ -13,7 +13,12 @@
  *  3. Gear icon → Project Settings → Script Properties → Add:
  *       CLAUDE_API_KEY = sk-ant-...your key...
  *  4. Function dropdown → setupTriggers → Run → approve permissions
- *  5. Function dropdown → runNow → Run
+ *  5. Function dropdown → authorizeDrive → Run → approve the Drive permission
+ *     (REQUIRED for reading uploaded chalkboard/poster photos)
+ *  6. Function dropdown → runNow → Run
+ *
+ * If image submissions error with "You do not have permission to call
+ * DriveApp.getFileById", run authorizeDrive once and approve the prompt.
  */
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -46,11 +51,19 @@ function getOrCreateApprovedSheet(ss) {
   let sheet = ss.getSheetByName(APPROVED_SHEET_NAME);
   if (!sheet) {
     sheet = ss.insertSheet(APPROVED_SHEET_NAME);
-    const r = sheet.getRange(1, 1, 1, APPROVED_HEADERS.length);
+    Logger.log('Created "Approved Events" sheet.');
+  }
+  // Always reconcile the header row so columns stay correctly labeled.
+  // Sheets created by older versions had column R as "Notes" instead of
+  // "Submitted by" — this relabels it without touching the data rows.
+  const r = sheet.getRange(1, 1, 1, APPROVED_HEADERS.length);
+  const current = r.getValues()[0];
+  const matches = APPROVED_HEADERS.every((h, i) => (current[i] || '').toString().trim() === h);
+  if (!matches) {
     r.setValues([APPROVED_HEADERS]);
     r.setFontWeight('bold');
     r.setBackground('#f0f9ff');
-    Logger.log('Created "Approved Events" sheet.');
+    Logger.log('Reconciled Approved Events header row.');
   }
   return sheet;
 }
@@ -128,12 +141,14 @@ function looksLikeEventPage(text) {
 
 // Notes text that looks like structured event schedules
 function looksLikeEventSchedule(text) {
-  if (text.length < 100) return false;
+  const t = (text || '').trim();
+  if (t.length < 12) return false; // ignore trivial notes like "thanks!"
   return (
-    /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(text) ||
-    /\d{1,2}(:\d{2})?\s*(am|pm)/i.test(text) ||
-    /\b(live music|trivia|open mic|karaoke|bingo|comedy|game night|happy hour)\b/i.test(text) ||
-    /(\n.*){3,}/.test(text) // 3+ lines = likely pasted schedule
+    /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(t) ||
+    /\bevery\b/i.test(t) ||                                  // "every wednesday"
+    /\d{1,2}(:\d{2})?\s*(am|pm)\b/i.test(t) ||               // "7pm", "7:30 pm", "7-9pm"
+    /\b(music|trivia|open mic|karaoke|bingo|comedy|game night|happy hour|concert|market|festival|show|tasting|brunch|live|night)\b/i.test(t) ||
+    /(\n.*){2,}/.test(t)                                     // multi-line = pasted schedule
   );
 }
 
@@ -279,9 +294,11 @@ ${pageText}
 
 Rules:
 - Extract ALL events: live music, trivia, open mic, karaoke, bingo, comedy, game nights, markets, themed nights, etc.
-- For RECURRING events (e.g. "Trivia every Tuesday 7pm"), generate one row per date from today through ${endDateStr}.
+- IMPORTANT — for RECURRING events (e.g. "Trivia every Tuesday 7pm"), return ONLY ONE object with isRecurring:true and weekday set (e.g. "Tuesday"). Do NOT list out individual dates — the system expands them automatically. This keeps your response short.
+- For ONE-TIME events with a specific date, set startDate and leave weekday empty.
 - YEAR: dates with only month+day — use ${year} unless that date already passed, then use ${parseInt(year) + 1}.
-- Include today's events. Skip events that fully ended more than 1 day ago.
+- Skip any one-time event whose date is before ${today}. Include today's events.
+- ORDER the output chronologically, SOONEST upcoming events FIRST. If the page has a very large number of events (e.g. a long concert series), prioritize the next ~8 weeks — list those first so the most relevant upcoming events are never dropped.
 - Infer venue name from page title or context if not explicit. Default town: Bristol.
 - Cost: "Free", "$X", or empty string.${retryNote}
 
@@ -291,7 +308,8 @@ Return ONLY a JSON array, no markdown, no prose. Schema per object:
   "venue": "establishment name",
   "town": "Bristol | Warren | Providence | Newport | Other",
   "category": "Trivia | Live Music | Food/Drink | Sports/League | Market | Family | Comedy | Arts/Culture | Other",
-  "startDate": "YYYY-MM-DD",
+  "startDate": "YYYY-MM-DD (one-time events only, else empty)",
+  "weekday": "Monday..Sunday (recurring weekly events only, else empty)",
   "startTime": "HH:MM (24h) or empty",
   "endTime": "HH:MM (24h) or empty",
   "isRecurring": true|false,
@@ -325,8 +343,10 @@ Carefully read the image and extract ALL visible events:
 - Any community or recurring weekly/monthly events
 
 Rules:
-- For recurring events (e.g. "Every Tuesday"), generate one row per date from today through ${endDateStr}.
+- IMPORTANT — for recurring events (e.g. "Every Tuesday"), return ONLY ONE object with isRecurring:true and weekday set (e.g. "Tuesday"). Do NOT list out individual dates — the system expands them automatically.
+- For ONE-TIME events with a specific date, set startDate and leave weekday empty.
 - YEAR: if only month+day shown, use ${year} unless past, then ${parseInt(year) + 1}.
+- Skip any one-time event whose date is before ${today}. ORDER the output soonest upcoming first.
 - Infer venue from any logos/name visible in the image. Default town: Bristol.
 - Cost: "Free", "$X", or empty string.
 
@@ -336,7 +356,8 @@ Return ONLY a JSON array, no markdown, no prose. Schema per object:
   "venue": "establishment name",
   "town": "Bristol | Warren | Providence | Newport | Other",
   "category": "Trivia | Live Music | Food/Drink | Sports/League | Market | Family | Comedy | Arts/Culture | Other",
-  "startDate": "YYYY-MM-DD",
+  "startDate": "YYYY-MM-DD (one-time events only, else empty)",
+  "weekday": "Monday..Sunday (recurring weekly events only, else empty)",
   "startTime": "HH:MM (24h) or empty",
   "endTime": "HH:MM (24h) or empty",
   "isRecurring": true|false,
@@ -363,25 +384,52 @@ function callClaudeApi(payload) {
 
   const body = JSON.parse(resp.getContentText());
   if (body.error) throw new Error('Claude API error: ' + body.error.message);
+  if (!body.content || !body.content[0] || typeof body.content[0].text !== 'string') {
+    Logger.log('Unexpected API response: ' + resp.getContentText().substring(0, 600));
+    throw new Error('Claude returned no text content.');
+  }
 
   const continuation = body.content[0].text.trim();
+  Logger.log('  Claude stop_reason=' + body.stop_reason + ', length=' + continuation.length);
   Logger.log('  Claude (first 400 chars):\n' + continuation.substring(0, 400));
+  // stop_reason "max_tokens" means the JSON was truncated — extractJsonArray repairs it.
   return extractJsonArray(continuation);
 }
 
 function extractJsonArray(text) {
+  const tryParse = (s) => {
+    try { const r = JSON.parse(s); return Array.isArray(r) ? r : null; } catch (_) { return null; }
+  };
+
+  // 1. Standard strategies (prefill continuation, echoed array, stripped fences)
   const candidates = [
     '[' + text,
     text,
     text.replace(/^```json?\s*/i, '').replace(/\s*```$/i, '').trim(),
   ];
   for (const c of candidates) {
-    try { const r = JSON.parse(c); if (Array.isArray(r)) return r; } catch (_) {}
+    const r = tryParse(c);
+    if (r) return r;
     const s = c.indexOf('['), e = c.lastIndexOf(']');
     if (s !== -1 && e > s) {
-      try { const r = JSON.parse(c.slice(s, e + 1)); if (Array.isArray(r)) return r; } catch (_) {}
+      const r2 = tryParse(c.slice(s, e + 1));
+      if (r2) return r2;
     }
   }
+
+  // 2. Repair a TRUNCATED array (response hit max_tokens mid-object).
+  //    Keep everything up to the last complete "}" and close the array.
+  const full     = '[' + text;
+  const start    = full.indexOf('[');
+  const lastObj  = full.lastIndexOf('}');
+  if (start !== -1 && lastObj > start) {
+    const repaired = tryParse(full.slice(start, lastObj + 1) + ']');
+    if (repaired && repaired.length > 0) {
+      Logger.log('  ⚠ Recovered ' + repaired.length + ' events from a truncated response.');
+      return repaired;
+    }
+  }
+
   Logger.log('All JSON strategies failed. Raw:\n' + text);
   throw new Error('Could not parse Claude response as JSON.');
 }
@@ -397,7 +445,7 @@ function callClaude(pageText, sourceUrl) {
 
   let events = callClaudeApi({
     model: CLAUDE_MODEL,
-    max_tokens: 4096,
+    max_tokens: 8192,
     messages: [
       { role: 'user', content: buildPrompt(textToSend, sourceUrl, false) },
       { role: 'assistant', content: '[' },
@@ -410,7 +458,7 @@ function callClaude(pageText, sourceUrl) {
     Utilities.sleep(1500);
     events = callClaudeApi({
       model: CLAUDE_MODEL,
-      max_tokens: 4096,
+      max_tokens: 8192,
       messages: [
         { role: 'user', content: buildPrompt(textToSend, sourceUrl, true) },
         { role: 'assistant', content: '[' },
@@ -426,7 +474,7 @@ function callClaudeWithNotes(notes, sourceLabel) {
   Logger.log('  Sending notes text to Claude (' + notes.length + ' chars)');
   return callClaudeApi({
     model: CLAUDE_MODEL,
-    max_tokens: 4096,
+    max_tokens: 8192,
     messages: [
       { role: 'user', content: buildPrompt(notes, sourceLabel + ' (pasted notes)', false) },
       { role: 'assistant', content: '[' },
@@ -439,7 +487,7 @@ function callClaudeWithImage(base64, mimeType, sourceLabel) {
   Logger.log('  Sending image to Claude Vision (' + mimeType + ')');
   return callClaudeApi({
     model: CLAUDE_MODEL,
-    max_tokens: 4096,
+    max_tokens: 8192,
     messages: [
       {
         role: 'user',
@@ -475,6 +523,54 @@ function buildExistingKeys(approvedSheet) {
   return keys;
 }
 
+// Expand recurring weekly events into individual dated rows IN CODE
+// (instead of asking Claude to enumerate them — that blows the token budget).
+const WEEKDAY_MAP = {
+  sunday: 0, sun: 0, monday: 1, mon: 1, tuesday: 2, tue: 2, tues: 2,
+  wednesday: 3, wed: 3, thursday: 4, thu: 4, thur: 4, thurs: 4,
+  friday: 5, fri: 5, saturday: 6, sat: 6,
+};
+
+function parseWeekday(value) {
+  if (!value) return null;
+  const k = String(value).toLowerCase().trim();
+  if (k in WEEKDAY_MAP) return WEEKDAY_MAP[k];
+  for (const key in WEEKDAY_MAP) {
+    if (k.indexOf(key) !== -1) return WEEKDAY_MAP[key];
+  }
+  return null;
+}
+
+function expandRecurringEvents(events) {
+  const tz    = 'America/New_York';
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const end = new Date();
+  end.setMonth(end.getMonth() + MONTHS_AHEAD);
+
+  const out = [];
+  for (const e of events) {
+    const wd = e.isRecurring ? parseWeekday(e.weekday || e.recurrenceRule) : null;
+
+    if (wd !== null) {
+      // Generate one occurrence per matching weekday from today through the window
+      const d = new Date(today);
+      while (d.getDay() !== wd) d.setDate(d.getDate() + 1);
+      let count = 0;
+      for (; d <= end && count < 20; d.setDate(d.getDate() + 7), count++) {
+        const copy = {};
+        for (const k in e) copy[k] = e[k];
+        copy.startDate = Utilities.formatDate(d, tz, 'yyyy-MM-dd');
+        out.push(copy);
+      }
+    } else {
+      // One-time event, or recurring with no clear weekday — keep as-is
+      out.push(e);
+    }
+  }
+  return out;
+}
+
 function writeEvents(approvedSheet, events, sourceUrl, submittedBy, existingKeys) {
   const tz      = 'America/New_York';
   const today   = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
@@ -482,8 +578,10 @@ function writeEvents(approvedSheet, events, sourceUrl, submittedBy, existingKeys
   let added = 0;
 
   for (const e of events) {
-    if (!e.name || !e.startDate) continue;
-    if (e.startDate < cutoff) continue;
+    if (!e.name) continue;
+    // Require a date OR a recurring flag (undated recurring → "Always Happening")
+    if (!e.startDate && !e.isRecurring) continue;
+    if (e.startDate && e.startDate < cutoff) continue;
     const key = eventKey(e.venue, e.name, e.startDate, e.startTime);
     if (existingKeys.has(key)) continue;
     existingKeys.add(key);
@@ -493,7 +591,7 @@ function writeEvents(approvedSheet, events, sourceUrl, submittedBy, existingKeys
       (e.venue           || '').trim(),
       (e.town            || DEFAULT_TOWN).trim(),
       (e.category        || 'Other').trim(),
-      e.startDate,
+      e.startDate        || '',
       e.startTime        || '',
       e.endTime          || '',
       e.isRecurring      ? 'Yes' : 'No',
@@ -619,7 +717,11 @@ function processNewSubmissions() {
         continue;
       }
 
-      const added = writeEvents(approvedSheet, allEvents, url || imageValue || 'manual', submittedBy, existingKeys);
+      // Expand recurring weekly events into individual dated rows (in code)
+      const expanded = expandRecurringEvents(allEvents);
+      Logger.log('  Expanded ' + allEvents.length + ' → ' + expanded.length + ' dated rows');
+
+      const added = writeEvents(approvedSheet, expanded, url || imageValue || 'manual', submittedBy, existingKeys);
       totalAdded += added;
       rawSheet.getRange(row + 1, processedCol).setValue('done — ' + added + ' events added ' + today);
     } catch (err) {
@@ -690,6 +792,21 @@ function onFormSubmitHandler(e) {
 
 function runNow()      { processNewSubmissions(); }
 function resetErrors() { _resetRows(s => s.startsWith('error') || isStuckProcessing(s)); }
+
+/** Clear rows that finished with 0 events (e.g. short notes wrongly skipped) → retry them. */
+function resetEmpty()  { _resetRows(s => /0 events/i.test(s)); }
+
+/**
+ * Run this ONCE manually after adding image support.
+ * Touching DriveApp forces Google to show the Drive permission consent screen.
+ * Triggers (form-submit, weekly) can't prompt for new permissions on their own,
+ * so you must approve the Drive scope here first.
+ */
+function authorizeDrive() {
+  const root = DriveApp.getRootFolder();
+  Logger.log('✓ Drive access authorized. Root folder: ' + root.getName());
+  Logger.log('You can now process image submissions. Run resetErrors() then runNow().');
+}
 function resetAll()    { _resetRows(() => true); }
 
 function _resetRows(predicate) {

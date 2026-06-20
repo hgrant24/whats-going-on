@@ -89,31 +89,6 @@ export default function EventsClient({ grouped, rawSubmissions, hasApprovedTab }
         )
       )}
 
-      {/* Source list — only show URL submissions, skip notes/images */}
-      {rawSubmissions.filter(s => s.link).length > 0 && (
-        <section className="pt-2">
-          <h2 className="text-xs font-bold tracking-widest text-stone-400 uppercase mb-2">
-            Sources
-          </h2>
-          <ul className="space-y-1">
-            {rawSubmissions
-              .filter(s => s.link)
-              .map((s, i) => (
-                <li key={i} className="text-xs">
-                  <a
-                    href={s.link}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-stone-400 hover:text-stone-600 transition-colors truncate block"
-                  >
-                    {s.link}
-                  </a>
-                </li>
-              ))}
-          </ul>
-        </section>
-      )}
-
       {/* True empty state */}
       {!hasAnything && (
         <div className="text-center py-12 text-stone-400">

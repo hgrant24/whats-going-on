@@ -35,6 +35,7 @@ export interface Event {
   outdoor: boolean | null;
   imageUrl: string | null;
   notes: string | null;
+  submittedBy: string | null;
 }
 
 export interface GroupedEvents {
