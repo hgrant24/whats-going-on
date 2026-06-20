@@ -164,7 +164,10 @@ If no events found, return [].`;
   const payload = JSON.stringify({
     model: CLAUDE_MODEL,
     max_tokens: 4096,
-    messages: [{ role: 'user', content: prompt }],
+    messages: [
+      { role: 'user', content: prompt },
+      { role: 'assistant', content: '[' }, // prefill — forces Claude to continue the JSON array
+    ],
   });
 
   const resp = UrlFetchApp.fetch('https://api.anthropic.com/v1/messages', {
@@ -181,16 +184,23 @@ If no events found, return [].`;
   const body = JSON.parse(resp.getContentText());
   if (body.error) throw new Error('Claude error: ' + body.error.message);
 
-  const raw = body.content[0].text.trim()
-    .replace(/^```json?\s*/i, '')
-    .replace(/\s*```$/, '')
-    .trim();
+  // Prepend the '[' we used as the prefill, then parse
+  const raw = '[' + body.content[0].text.trim();
+  Logger.log('Claude raw response (first 300 chars): ' + raw.substring(0, 300));
 
   try {
     return JSON.parse(raw);
   } catch (e) {
-    Logger.log('JSON parse failed. Raw response:\n' + raw);
-    throw new Error('Could not parse Claude response as JSON.');
+    // Last-resort: find the array boundaries
+    const start = raw.indexOf('[');
+    const end = raw.lastIndexOf(']');
+    if (start !== -1 && end > start) {
+      try {
+        return JSON.parse(raw.slice(start, end + 1));
+      } catch (_) {}
+    }
+    Logger.log('Full Claude response:\n' + raw);
+    throw new Error('Could not parse Claude response as JSON. Check Execution Log for raw output.');
   }
 }
 
@@ -394,4 +404,22 @@ function onFormSubmitHandler(e) {
 function runNow() {
   // Select this function and hit Run to process all pending URLs immediately
   processNewSubmissions();
+}
+
+function resetErrors() {
+  // Clears "error: ..." status on any rows so they'll be re-processed on next run.
+  // Select this and hit Run whenever you want to retry failed rows.
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const rawSheet = getRawSheet(ss);
+  const processedCol = getOrAddProcessedCol(rawSheet);
+  const data = rawSheet.getDataRange().getValues();
+  let cleared = 0;
+  for (let row = 1; row < data.length; row++) {
+    const status = (data[row][processedCol - 1] || '').toString().trim();
+    if (status.startsWith('error')) {
+      rawSheet.getRange(row + 1, processedCol).setValue('');
+      cleared++;
+    }
+  }
+  Logger.log('Cleared ' + cleared + ' error rows. Run runNow() to retry them.');
 }
