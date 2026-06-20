@@ -89,25 +89,46 @@ function getNotesColIdx(headers) {
 // ─── Web fetch ────────────────────────────────────────────────────────────────
 
 function fetchPageText(url) {
+  // Primary: Jina.ai reader — renders JavaScript, returns clean markdown text.
+  // Free, no API key, handles Squarespace/Wix/React/etc.
+  try {
+    const jinaResp = UrlFetchApp.fetch('https://r.jina.ai/' + url, {
+      muteHttpExceptions: true,
+      followRedirects: true,
+      headers: { 'Accept': 'text/plain' },
+    });
+    if (jinaResp.getResponseCode() === 200) {
+      const text = jinaResp.getContentText().trim();
+      if (text.length > 300) {
+        Logger.log('Jina reader: ' + text.length + ' chars from ' + url);
+        return text.substring(0, 12000);
+      }
+    }
+    Logger.log('Jina returned short/empty response, falling back to direct fetch.');
+  } catch (e) {
+    Logger.log('Jina reader failed (' + e.message + '), falling back to direct fetch.');
+  }
+
+  // Fallback: direct fetch + strip HTML tags manually
   try {
     const resp = UrlFetchApp.fetch(url, {
       muteHttpExceptions: true,
       followRedirects: true,
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; WhatsGoingOnBot/1.0 +https://whats-going-on-chi.vercel.app)' },
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; WhatsGoingOnBot/1.0)' },
     });
     if (resp.getResponseCode() !== 200) {
       Logger.log('Non-200 from ' + url + ': ' + resp.getResponseCode());
       return null;
     }
     let html = resp.getContentText().substring(0, 40000);
-    // Strip scripts, styles, and tags; collapse whitespace
     html = html.replace(/<script[\s\S]*?<\/script>/gi, ' ');
     html = html.replace(/<style[\s\S]*?<\/style>/gi, ' ');
     html = html.replace(/<[^>]+>/g, ' ');
     html = html.replace(/\s{2,}/g, ' ').trim();
-    return html.substring(0, 10000); // keep within reasonable token budget
+    Logger.log('Direct fetch: ' + html.length + ' chars from ' + url);
+    return html.substring(0, 10000);
   } catch (e) {
-    Logger.log('Fetch error for ' + url + ': ' + e.message);
+    Logger.log('Direct fetch error for ' + url + ': ' + e.message);
     return null;
   }
 }
@@ -126,7 +147,7 @@ function callClaude(pageText, sourceUrl) {
 
   const prompt = `You extract events from venue/restaurant websites for a local events guide in Bristol and the East Bay of Rhode Island.
 
-Today: ${today}. Generate events from ${today} through ${endDateStr}.
+Today: ${today}. The current year is ${today.substring(0, 4)}. Generate events from ${today} through ${endDateStr}.
 
 Webpage from: ${sourceUrl}
 ---
@@ -136,8 +157,10 @@ ${pageText}
 Instructions:
 - Extract ALL events: trivia nights, live music, open mic, karaoke, game nights, markets, themed nights, etc.
 - For RECURRING events (e.g. "Trivia every Tuesday at 7pm"), generate one entry per date from today through ${endDateStr}.
-- Skip events that have already passed.
-- If the venue/town is unclear, use "Bristol" and infer the venue name from the page.
+- YEAR HANDLING: If a date shows only month/day (like "8/1" or "August 1"), assume the current year (${today.substring(0, 4)}) unless that month has already passed this year, in which case use next year.
+- Include today's events — do not skip them.
+- Only skip events that ended more than 1 day ago.
+- If the venue/town is unclear, use "Bristol" and infer the venue name from the page title or content.
 - For cost: use "Free" if free, "$X" for paid, or leave blank if unknown.
 
 Return ONLY a JSON array — no markdown fences, no extra text. Schema:
@@ -226,9 +249,14 @@ function writeEvents(approvedSheet, events, sourceUrl, notes, existingKeys) {
   const today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
   let added = 0;
 
+  // Cutoff = yesterday, so today's events are always included
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const cutoff = Utilities.formatDate(yesterday, tz, 'yyyy-MM-dd');
+
   for (const e of events) {
     if (!e.name || !e.startDate) continue;
-    if (e.startDate < today) continue; // skip past events
+    if (e.startDate < cutoff) continue; // skip events older than yesterday
     const key = eventKey(e.name, e.startDate);
     if (existingKeys.has(key)) continue; // skip duplicates
     existingKeys.add(key);
