@@ -66,7 +66,13 @@ export default function EventsClient({ grouped, rawSubmissions, hasApprovedTab, 
     <div className="flex flex-col gap-6">
       {/* Only show filters when there are structured events to filter */}
       {hasApprovedTab && totalAll > 0 && (
-        <EventFilters filters={filters} onChange={setFilters} totalResults={totalFiltered} towns={towns} />
+        <div className="flex flex-col gap-2">
+          <EventFilters filters={filters} onChange={setFilters} totalResults={totalFiltered} towns={towns} />
+          <p className="text-xs text-stone-400 px-1">
+            Don&apos;t see your town{areaName ? ` near ${areaName}` : ''}? Tap the{' '}
+            <span className="font-semibold" style={{ color: '#5B9BAE' }}>📍 menu at the top</span> to switch regions.
+          </p>
+        </div>
       )}
 
       {/* Structured events (Approved Events tab) */}
@@ -80,6 +86,9 @@ export default function EventsClient({ grouped, rawSubmissions, hasApprovedTab, 
             >
               Clear filters
             </button>
+            <p className="mt-3 text-sm">
+              In a different area? Tap the <span className="font-semibold" style={{ color: '#5B9BAE' }}>📍 menu at the top</span> to switch regions.
+            </p>
           </div>
         ) : (
           <div className="flex flex-col gap-8">

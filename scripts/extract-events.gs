@@ -636,6 +636,7 @@ function isStuckProcessing(status) {
 function processNewSubmissions() {
   const ss            = SpreadsheetApp.getActiveSpreadsheet();
   const rawSheet      = getRawSheet(ss);
+  ensureRawColumn(rawSheet, 'Location'); // so manual URL pastes can be hub-tagged too
   const approvedSheet = getOrCreateApprovedSheet(ss);
   const processedCol  = getOrAddProcessedCol(rawSheet);
 
@@ -904,6 +905,36 @@ function resetErrors() { _resetRows(s => s.startsWith('error') || isStuckProcess
 
 /** Clear rows that finished with 0 events (e.g. short notes wrongly skipped) → retry them. */
 function resetEmpty()  { _resetRows(s => /0 events/i.test(s)); }
+
+// ── One-time migration: tag every existing Approved Events row with its hub ──
+// Maps by the event's Source link domain. Anything not listed → Bristol.
+// Safe to re-run anytime (e.g. after adding more domains). Run: backfillLocations
+const HUB_BY_DOMAIN = {
+  'gpubrestaurants.com':      'Sagamore Beach',
+  'eastbaygrille.com':        'Sagamore Beach',
+  'sandwichartsalliance.org': 'Sagamore Beach',
+  'ciscokitchenbar.com':      'Sagamore Beach',
+};
+
+function backfillLocations() {
+  const ss     = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet  = getOrCreateApprovedSheet(ss); // reconciles header → ensures Location column
+  const data   = sheet.getDataRange().getValues();
+  const headers = data[0];
+  const srcCol = headers.findIndex(h => h.toString().trim().toLowerCase() === 'source link');
+  const locCol = headers.findIndex(h => h.toString().trim().toLowerCase() === 'location');
+  if (locCol === -1) { Logger.log('No Location column found — re-paste the latest script.'); return; }
+
+  const counts = {};
+  for (let i = 1; i < data.length; i++) {
+    const src = (data[i][srcCol] || '').toString().toLowerCase();
+    let hub = 'Bristol';
+    for (const dom in HUB_BY_DOMAIN) { if (src.indexOf(dom) !== -1) { hub = HUB_BY_DOMAIN[dom]; break; } }
+    sheet.getRange(i + 1, locCol + 1).setValue(hub);
+    counts[hub] = (counts[hub] || 0) + 1;
+  }
+  Logger.log('Backfilled Location for ' + (data.length - 1) + ' rows: ' + JSON.stringify(counts));
+}
 
 /**
  * Run this ONCE manually after adding image support.
