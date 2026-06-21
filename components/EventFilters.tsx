@@ -11,7 +11,7 @@ interface Props {
 
 export default function EventFilters({ filters, onChange, totalResults, towns }: Props) {
   const hasActiveFilters =
-    filters.town !== 'All' || filters.category !== 'All' || filters.search !== '';
+    filters.town !== 'All' || filters.category !== 'All' || filters.search !== '' || filters.freeOnly;
 
   return (
     <div className="bg-white border border-stone-200 rounded-xl p-3.5 flex flex-col gap-3">
@@ -48,9 +48,23 @@ export default function EventFilters({ filters, onChange, totalResults, towns }:
           ))}
         </select>
 
+        {/* Tara Mode — free events only */}
+        <button
+          type="button"
+          onClick={() => onChange({ ...filters, freeOnly: !filters.freeOnly })}
+          aria-pressed={filters.freeOnly}
+          title="Tara Mode — show only free events"
+          className="text-sm rounded-lg px-2.5 py-1.5 font-medium border transition-colors"
+          style={filters.freeOnly
+            ? { backgroundColor: '#1C3D55', color: 'white', borderColor: '#1C3D55' }
+            : { backgroundColor: 'white', color: '#1C3D55', borderColor: '#d6d3d1' }}
+        >
+          🆓 Tara Mode
+        </button>
+
         {hasActiveFilters && (
           <button
-            onClick={() => onChange({ town: 'All', category: 'All', search: '' })}
+            onClick={() => onChange({ town: 'All', category: 'All', search: '', freeOnly: false })}
             className="text-sm text-teal-600 hover:text-teal-800 font-medium transition-colors ml-auto"
           >
             Clear filters

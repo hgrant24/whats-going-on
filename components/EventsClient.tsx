@@ -6,10 +6,18 @@ import EventFilters from './EventFilters';
 import EventSection from './EventSection';
 import SubmitEventCTA from './SubmitEventCTA';
 
+// An event counts as "paid" only if it lists a dollar amount greater than zero
+// (so "Free", "$0", "Donation", and blank all survive Tara Mode).
+function eventIsPaid(cost: string | null): boolean {
+  const m = (cost ?? '').match(/\$\s*(\d+(?:\.\d+)?)/);
+  return !!m && parseFloat(m[1]) > 0;
+}
+
 function filterEvents(events: Event[], filters: Filters): Event[] {
   return events.filter(event => {
     if (filters.town !== 'All' && event.town !== filters.town) return false;
     if (filters.category !== 'All' && event.category !== filters.category) return false;
+    if (filters.freeOnly && eventIsPaid(event.cost)) return false;
     if (filters.search) {
       const q = filters.search.toLowerCase();
       const haystack = [event.name, event.venue, event.town, event.description ?? '', event.tags.join(' ')]
@@ -30,7 +38,7 @@ interface Props {
 }
 
 export default function EventsClient({ grouped, rawSubmissions, hasApprovedTab, submitHref = '/submit', areaName }: Props) {
-  const [filters, setFilters] = useState<Filters>({ town: 'All', category: 'All', search: '' });
+  const [filters, setFilters] = useState<Filters>({ town: 'All', category: 'All', search: '', freeOnly: false });
 
   const filtered = useMemo<GroupedEvents>(
     () => ({
@@ -58,7 +66,7 @@ export default function EventsClient({ grouped, rawSubmissions, hasApprovedTab, 
     grouped.tonight.length + grouped.thisWeek.length + grouped.upcoming.length + grouped.recurring.length;
 
   const hasActiveFilter =
-    filters.town !== 'All' || filters.category !== 'All' || filters.search !== '';
+    filters.town !== 'All' || filters.category !== 'All' || filters.search !== '' || filters.freeOnly;
 
   const hasAnything = totalAll > 0 || rawSubmissions.length > 0;
 
@@ -81,7 +89,7 @@ export default function EventsClient({ grouped, rawSubmissions, hasApprovedTab, 
           <div className="text-center py-10 text-stone-400">
             <p>No events match your filters.</p>
             <button
-              onClick={() => setFilters({ town: 'All', category: 'All', search: '' })}
+              onClick={() => setFilters({ town: 'All', category: 'All', search: '', freeOnly: false })}
               className="mt-2 text-teal-600 hover:underline text-sm font-medium"
             >
               Clear filters

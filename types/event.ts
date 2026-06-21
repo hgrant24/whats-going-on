@@ -63,4 +63,5 @@ export interface Filters {
   town: string; // dynamic — options derived from the events in the current hub
   category: CategoryFilter;
   search: string;
+  freeOnly: boolean; // "Tara Mode" — hide events with a ticket price
 }
