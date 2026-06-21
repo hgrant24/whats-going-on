@@ -1116,19 +1116,37 @@ function emailGcalUrl(ev) {
     Object.keys(p).map(k => encodeURIComponent(k) + '=' + encodeURIComponent(p[k])).join('&');
 }
 
+const DIGEST_ONEOFF_CAP = 24; // max one-time events listed; rest → "see the site"
+const DIGEST_RECUR_CAP  = 15; // max weekly regulars listed
+
 function buildEmailBody(town, evs) {
   const tz = 'America/New_York';
   const fmtTime = t => { const m = (t || '').match(/^(\d{1,2}):(\d{2})/); if (!m) return ''; let hh = parseInt(m[1], 10); const mn = m[2]; const ap = hh >= 12 ? 'PM' : 'AM'; hh = hh % 12 || 12; return mn === '00' ? (hh + ' ' + ap) : (hh + ':' + mn + ' ' + ap); };
-  const dayName = iso => { const a = iso.split('-').map(Number); return Utilities.formatDate(new Date(a[0], a[1] - 1, a[2]), tz, 'EEEE, MMM d'); };
+  const dt      = iso => { const a = iso.split('-').map(Number); return new Date(a[0], a[1] - 1, a[2]); };
+  const dayName = iso => Utilities.formatDate(dt(iso), tz, 'EEEE, MMM d');
+  const weekday = iso => Utilities.formatDate(dt(iso), tz, 'EEEE');
+
+  // Split: one-time events get featured by day; recurring collapse into a footer
+  const oneOff = evs.filter(e => !e.isRecurring);
+  const seen = {}, recurring = [];
+  evs.filter(e => e.isRecurring).forEach(e => {
+    const k = (e.name + '|' + e.venue + '|' + e.startTime).toLowerCase();
+    if (!seen[k]) { seen[k] = true; recurring.push(e); }
+  });
+
+  const counts = [];
+  if (oneOff.length)    counts.push(oneOff.length + ' happening');
+  if (recurring.length) counts.push(recurring.length + ' weekly regular' + (recurring.length === 1 ? '' : 's'));
 
   let html = '<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:560px;margin:0 auto 16px;color:#1C3D55;background:#F4EFE9;padding:24px;border-radius:12px">';
   html += '<h1 style="font-size:22px;margin:0 0 2px">What\'s Going On in ' + esc(town) + '</h1>';
-  html += '<p style="color:#777;margin:0 0 18px;font-size:14px">The next 7 days &middot; ' + evs.length + ' event' + (evs.length === 1 ? '' : 's') + '</p>';
+  html += '<p style="color:#777;margin:0 0 4px;font-size:14px">The next 7 days &middot; ' + counts.join(' &middot; ') + '</p>';
+
+  // Featured one-time events, grouped by day
   let curDay = '';
-  evs.forEach(ev => {
+  oneOff.slice(0, DIGEST_ONEOFF_CAP).forEach(ev => {
     if (ev.startDate !== curDay) {
       curDay = ev.startDate;
-      // Prominent day banner so the day break is easy to scan
       html += '<div style="background:#1C3D55;color:#ffffff;font-size:15px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;padding:9px 14px;border-radius:8px;margin:24px 0 12px">' + esc(dayName(ev.startDate)) + '</div>';
     }
     const time = fmtTime(ev.startTime);
@@ -1139,6 +1157,27 @@ function buildEmailBody(town, evs) {
     if (cal) html += '<a href="' + cal + '" style="color:#5B9BAE;font-size:12px;font-weight:600;text-decoration:none">+ Add to Google Calendar</a>';
     html += '</div>';
   });
+  if (oneOff.length > DIGEST_ONEOFF_CAP) {
+    html += '<p style="color:#777;font-size:13px;margin:4px 0 0;padding-left:4px">+ ' + (oneOff.length - DIGEST_ONEOFF_CAP) + ' more this week &mdash; see the site</p>';
+  }
+
+  // Compact "every week" footer for recurring events
+  if (recurring.length) {
+    html += '<div style="background:#5B9BAE;color:#ffffff;font-size:13px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;padding:8px 14px;border-radius:8px;margin:26px 0 10px">&#128257; Every week</div>';
+    recurring.slice(0, DIGEST_RECUR_CAP).forEach(ev => {
+      const time = fmtTime(ev.startTime);
+      const cal  = emailGcalUrl(ev);
+      const meta = [esc(ev.venue), weekday(ev.startDate) + 's', esc(time)].filter(Boolean).join(' &middot; ');
+      html += '<div style="margin:0 0 7px;padding-left:4px;font-size:13px">';
+      html += '<span style="font-weight:600">' + esc(ev.name) + '</span> <span style="color:#666">' + meta + '</span>';
+      if (cal) html += ' <a href="' + cal + '" style="color:#5B9BAE;text-decoration:none">+cal</a>';
+      html += '</div>';
+    });
+    if (recurring.length > DIGEST_RECUR_CAP) {
+      html += '<p style="color:#777;font-size:13px;margin:4px 0 0;padding-left:4px">+ ' + (recurring.length - DIGEST_RECUR_CAP) + ' more weekly &mdash; see the site</p>';
+    }
+  }
+
   const path = town.toLowerCase() === 'bristol' ? '' : '/' + townSlug(town);
   html += '<div style="margin-top:22px;padding-top:12px;border-top:1px solid #ddd"><a href="https://www.hansonsguide.com' + path + '" style="color:#5B9BAE;font-weight:600;text-decoration:none">See everything on the site &rarr;</a></div>';
   html += '</div>';
