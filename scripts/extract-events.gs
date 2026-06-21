@@ -633,10 +633,28 @@ function isStuckProcessing(status) {
 // MAIN PROCESSING LOOP
 // ═══════════════════════════════════════════════════════════════════════════
 
+// After this many weekly rechecks that add 0 NEW events, a URL source goes
+// dormant ('no') and is skipped to save Claude credits. Lower = more aggressive.
+const RESCAN_MAX_MISSES = 2;
+
+// Decide a source's re-scan policy after processing it:
+//  - image / notes-only (no URL) → 'no'  (static content; nothing new ever)
+//  - URL that produced events    → 'yes' (keep it active)
+//  - URL with N empty rechecks   → 'no'  (dormant; stops burning credits)
+function nextRescanPolicy(prev, url, wasRecheck, added) {
+  if (!url) return 'no';
+  if (wasRecheck && added === 0) {
+    const misses = (parseInt((prev || '').split(':')[1], 10) || 0) + 1;
+    return misses >= RESCAN_MAX_MISSES ? 'no' : ('yes:' + misses);
+  }
+  return 'yes';
+}
+
 function processNewSubmissions() {
   const ss            = SpreadsheetApp.getActiveSpreadsheet();
   const rawSheet      = getRawSheet(ss);
   ensureRawColumn(rawSheet, 'Location'); // so manual URL pastes can be hub-tagged too
+  ensureRawColumn(rawSheet, 'Rescan');   // per-source re-scan policy (yes / yes:N / no)
   const approvedSheet = getOrCreateApprovedSheet(ss);
   const processedCol  = getOrAddProcessedCol(rawSheet);
 
@@ -649,6 +667,7 @@ function processNewSubmissions() {
   const imageCol      = findCol(headers, 'upload image', 'image instead', 'image', 'photo', 'picture', 'file upload');
   const submittedByCol = findCol(headers, 'submitted by', 'your name', 'submitter', 'name');
   const locationCol    = findCol(headers, 'location', 'hub', 'area');
+  const rescanCol      = findCol(headers, 'rescan');
 
   Logger.log('Columns — url:' + urlCol + ' notes:' + notesCol + ' image:' + imageCol +
     ' submittedBy:' + submittedByCol + ' location:' + locationCol);
@@ -666,6 +685,8 @@ function processNewSubmissions() {
     const location    = locationCol    !== -1 ? (data[row][locationCol]    || '').toString().trim() : '';
     const townHint    = location || DEFAULT_TOWN;
     const status      = (data[row][processedCol - 1] || '').toString().trim();
+    const prevRescan  = rescanCol !== -1 ? (data[row][rescanCol] || '').toString().trim() : '';
+    const wasRecheck  = status.startsWith('recheck');
 
     // Need at least one input
     if (!url && !notes && !imageValue) continue;
@@ -723,6 +744,7 @@ function processNewSubmissions() {
         rawSheet.getRange(row + 1, processedCol).setValue(
           noInput ? 'done — 0 events (notes only, no extractable dates)' : 'done — 0 events found'
         );
+        if (rescanCol !== -1) rawSheet.getRange(row + 1, rescanCol + 1).setValue(nextRescanPolicy(prevRescan, url, wasRecheck, 0));
         continue;
       }
 
@@ -733,6 +755,7 @@ function processNewSubmissions() {
       const added = writeEvents(approvedSheet, expanded, url || imageValue || 'manual', submittedBy, existingKeys, location);
       totalAdded += added;
       rawSheet.getRange(row + 1, processedCol).setValue('done — ' + added + ' events added ' + today);
+      if (rescanCol !== -1) rawSheet.getRange(row + 1, rescanCol + 1).setValue(nextRescanPolicy(prevRescan, url, wasRecheck, added));
     } catch (err) {
       Logger.log('  → Error: ' + err.message);
       rawSheet.getRange(row + 1, processedCol).setValue('error: ' + err.message.substring(0, 120));
@@ -751,13 +774,21 @@ function processNewSubmissions() {
 function weeklyRecheck() {
   const ss           = SpreadsheetApp.getActiveSpreadsheet();
   const rawSheet     = getRawSheet(ss);
+  ensureRawColumn(rawSheet, 'Rescan');
   const processedCol = getOrAddProcessedCol(rawSheet);
   const data         = rawSheet.getDataRange().getValues();
+  const rescanCol    = findCol(data[0], 'rescan');
 
+  let queued = 0, skipped = 0;
   for (let row = 1; row < data.length; row++) {
     const status = (data[row][processedCol - 1] || '').toString().trim();
-    if (status.startsWith('done')) rawSheet.getRange(row + 1, processedCol).setValue('recheck');
+    if (!status.startsWith('done')) continue;
+    const rescan = rescanCol !== -1 ? (data[row][rescanCol] || '').toString().trim().toLowerCase() : '';
+    if (rescan === 'no') { skipped++; continue; } // static/dormant source → skip to save credits
+    rawSheet.getRange(row + 1, processedCol).setValue('recheck');
+    queued++;
   }
+  Logger.log('Weekly recheck: ' + queued + ' queued, ' + skipped + ' skipped (static/dormant).');
 
   const approvedSheet = ss.getSheetByName(APPROVED_SHEET_NAME);
   if (approvedSheet) {
@@ -952,6 +983,51 @@ function backfillLocations() {
     counts[hub] = (counts[hub] || 0) + 1;
   }
   Logger.log('Backfilled Location for ' + (data.length - 1) + ' rows: ' + JSON.stringify(counts));
+}
+
+// ── Re-scan policy helpers ──────────────────────────────────────────────────
+// classifyRescans(): set the policy for EXISTING rows without calling Claude —
+// image/notes-only → 'no' (static), URL rows → 'yes' (active). Run once now so
+// the next weekly skips static sources. Safe to re-run.
+function classifyRescans() {
+  const ss       = SpreadsheetApp.getActiveSpreadsheet();
+  const rawSheet = getRawSheet(ss);
+  ensureRawColumn(rawSheet, 'Rescan');
+  const data     = rawSheet.getDataRange().getValues();
+  const h        = data[0];
+  const urlCol   = findCol(h, 'url', 'link');
+  const imgCol   = findCol(h, 'upload image', 'image instead', 'image', 'photo', 'picture', 'file upload');
+  const notesCol = findCol(h, 'notes');
+  const rescanCol = findCol(h, 'rescan');
+  const stat = { yes: 0, no: 0 };
+  for (let row = 1; row < data.length; row++) {
+    const url   = urlCol   !== -1 ? (data[row][urlCol]   || '').toString().trim() : '';
+    const img   = imgCol   !== -1 ? (data[row][imgCol]   || '').toString().trim() : '';
+    const notes = notesCol !== -1 ? (data[row][notesCol] || '').toString().trim() : '';
+    if (!url && !img && !notes) continue;
+    const v = url ? 'yes' : 'no';
+    rawSheet.getRange(row + 1, rescanCol + 1).setValue(v);
+    stat[v]++;
+  }
+  Logger.log('classifyRescans → ' + JSON.stringify(stat));
+}
+
+// reactivateRescans(): wake up dormant URL sources (set 'no' → 'yes'). Leaves
+// image/notes rows static. Run if you want everything re-checked again.
+function reactivateRescans() {
+  const ss       = SpreadsheetApp.getActiveSpreadsheet();
+  const rawSheet = getRawSheet(ss);
+  ensureRawColumn(rawSheet, 'Rescan');
+  const data     = rawSheet.getDataRange().getValues();
+  const urlCol    = findCol(data[0], 'url', 'link');
+  const rescanCol = findCol(data[0], 'rescan');
+  let n = 0;
+  for (let row = 1; row < data.length; row++) {
+    const url = urlCol !== -1 ? (data[row][urlCol] || '').toString().trim() : '';
+    const cur = (data[row][rescanCol] || '').toString().trim().toLowerCase();
+    if (url && cur === 'no') { rawSheet.getRange(row + 1, rescanCol + 1).setValue('yes'); n++; }
+  }
+  Logger.log('Reactivated ' + n + ' dormant URL sources.');
 }
 
 /**
