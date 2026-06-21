@@ -959,21 +959,54 @@ function getOrCreateSubscribersSheet(ss) {
 // Subscribe (called from the site's subscribe form via doPost kind=subscribe)
 function handleSubscribe(p) {
   const email = (p.email || '').toString().trim().toLowerCase();
-  const town  = (p.town  || '').toString().trim() || 'Bristol';
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return jsonOut({ ok: false, error: 'invalid email' });
+
+  // Accept multiple towns: "towns" (comma-separated) or a single "town"
+  const raw   = (p.towns || p.town || 'Bristol').toString();
+  const towns = raw.split(',').map(t => t.trim()).filter(Boolean);
+  if (!towns.length) towns.push('Bristol');
 
   const ss    = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = getOrCreateSubscribersSheet(ss);
   const data  = sheet.getDataRange().getValues();
-  for (let i = 1; i < data.length; i++) {
-    if ((data[i][0] || '').toString().trim().toLowerCase() === email &&
-        (data[i][1] || '').toString().trim() === town) {
-      sheet.getRange(i + 1, 3).setValue('active'); // re-activate if they'd unsubscribed
-      return jsonOut({ ok: true, already: true });
+
+  towns.forEach(town => {
+    let found = false;
+    for (let i = 1; i < data.length; i++) {
+      if ((data[i][0] || '').toString().trim().toLowerCase() === email &&
+          (data[i][1] || '').toString().trim() === town) {
+        sheet.getRange(i + 1, 3).setValue('active'); // re-activate if previously unsubscribed
+        found = true; break;
+      }
     }
-  }
-  sheet.appendRow([email, town, 'active', new Date()]);
-  return jsonOut({ ok: true });
+    if (!found) sheet.appendRow([email, town, 'active', new Date()]);
+  });
+
+  // Immediate welcome email so they see exactly what they signed up for
+  try { sendWelcomeEmail(email, towns); } catch (err) { Logger.log('welcome email failed: ' + err); }
+
+  return jsonOut({ ok: true, towns: towns });
+}
+
+// One welcome email covering every town they subscribed to (a live sample digest)
+function sendWelcomeEmail(email, towns) {
+  const props = PropertiesService.getScriptProperties();
+  const key   = props.getProperty('RESEND_API_KEY');
+  if (!key) { Logger.log('RESEND_API_KEY not set — no welcome email.'); return; }
+  const from  = props.getProperty('RESEND_FROM') || "What's Going On <events@hansonsguide.com>";
+
+  let html = '<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:560px;margin:0 auto 8px;color:#1C3D55">';
+  html += '<p style="font-size:18px;font-weight:700;margin:0 0 4px">You\'re subscribed! 🎉</p>';
+  html += '<p style="color:#777;font-size:14px;margin:0">A fresh rundown lands every Wednesday morning for <b>' + esc(towns.join(', ')) + '</b>. Here\'s what\'s coming up:</p>';
+  html += '</div>';
+  towns.forEach(town => {
+    const evs = gatherUpcomingEvents(town);
+    html += evs.length
+      ? buildEmailBody(town, evs)
+      : '<div style="font-family:sans-serif;max-width:560px;margin:0 auto 16px;color:#777;font-size:14px;text-align:center">Nothing listed in ' + esc(town) + ' for the next 7 days yet — you\'ll be the first to know.</div>';
+  });
+  html += unsubFooter(email, ''); // welcome unsub = remove from all towns
+  sendResend(key, from, email, 'Welcome to What\'s Going On — ' + towns.join(' & '), html);
 }
 
 // Unsubscribe (GET link in every email)
@@ -1088,18 +1121,19 @@ function buildEmailBody(town, evs) {
   const fmtTime = t => { const m = (t || '').match(/^(\d{1,2}):(\d{2})/); if (!m) return ''; let hh = parseInt(m[1], 10); const mn = m[2]; const ap = hh >= 12 ? 'PM' : 'AM'; hh = hh % 12 || 12; return mn === '00' ? (hh + ' ' + ap) : (hh + ':' + mn + ' ' + ap); };
   const dayName = iso => { const a = iso.split('-').map(Number); return Utilities.formatDate(new Date(a[0], a[1] - 1, a[2]), tz, 'EEEE, MMM d'); };
 
-  let html = '<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:560px;margin:0 auto;color:#1C3D55;background:#F4EFE9;padding:24px;border-radius:12px">';
+  let html = '<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:560px;margin:0 auto 16px;color:#1C3D55;background:#F4EFE9;padding:24px;border-radius:12px">';
   html += '<h1 style="font-size:22px;margin:0 0 2px">What\'s Going On in ' + esc(town) + '</h1>';
   html += '<p style="color:#777;margin:0 0 18px;font-size:14px">The next 7 days &middot; ' + evs.length + ' event' + (evs.length === 1 ? '' : 's') + '</p>';
   let curDay = '';
   evs.forEach(ev => {
     if (ev.startDate !== curDay) {
       curDay = ev.startDate;
-      html += '<h2 style="font-size:15px;color:#1C3D55;border-bottom:1px solid #A8C8D4;padding-bottom:4px;margin:18px 0 8px">' + esc(dayName(ev.startDate)) + '</h2>';
+      // Prominent day banner so the day break is easy to scan
+      html += '<div style="background:#1C3D55;color:#ffffff;font-size:15px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;padding:9px 14px;border-radius:8px;margin:24px 0 12px">' + esc(dayName(ev.startDate)) + '</div>';
     }
     const time = fmtTime(ev.startTime);
     const cal  = emailGcalUrl(ev);
-    html += '<div style="margin:0 0 14px">';
+    html += '<div style="margin:0 0 14px;padding-left:4px">';
     html += '<div style="font-weight:600;font-size:15px">' + esc(ev.name) + '</div>';
     html += '<div style="color:#666;font-size:13px">' + [esc(ev.venue), esc(time)].filter(Boolean).join(' &middot; ') + '</div>';
     if (cal) html += '<a href="' + cal + '" style="color:#5B9BAE;font-size:12px;font-weight:600;text-decoration:none">+ Add to Google Calendar</a>';
@@ -1107,14 +1141,17 @@ function buildEmailBody(town, evs) {
   });
   const path = town.toLowerCase() === 'bristol' ? '' : '/' + townSlug(town);
   html += '<div style="margin-top:22px;padding-top:12px;border-top:1px solid #ddd"><a href="https://www.hansonsguide.com' + path + '" style="color:#5B9BAE;font-weight:600;text-decoration:none">See everything on the site &rarr;</a></div>';
-  return html; // NOTE: closing </div> added by unsubFooter
+  html += '</div>';
+  return html;
 }
 
+// Standalone footer (sits below the card). town='' → unsubscribe from everything.
 function unsubFooter(email, town) {
-  const url = webAppUrl() + '?unsub=' + encodeURIComponent(email) + '&town=' + encodeURIComponent(town);
-  return '<p style="color:#aaa;font-size:11px;margin-top:18px;text-align:center;font-family:sans-serif">' +
-    'You subscribed to ' + esc(town) + ' events on hansonsguide.com.<br>' +
-    '<a href="' + url + '" style="color:#aaa">Unsubscribe</a></p></div>';
+  const url = webAppUrl() + '?unsub=' + encodeURIComponent(email) + (town ? '&town=' + encodeURIComponent(town) : '');
+  const what = town ? (esc(town) + ' events') : 'these emails';
+  return '<p style="color:#aaa;font-size:11px;margin:4px auto 0;max-width:560px;text-align:center;font-family:sans-serif">' +
+    'You subscribed to ' + what + ' on hansonsguide.com.<br>' +
+    '<a href="' + url + '" style="color:#aaa">Unsubscribe</a></p>';
 }
 
 function sendResend(key, from, to, subject, html) {
