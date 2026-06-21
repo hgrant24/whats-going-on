@@ -37,6 +37,26 @@ export default async function LocationHome({ location }: { location: LocationDef
           <p className="mt-2 text-stone-500 leading-relaxed max-w-xl">{location.blurb}</p>
         </div>
 
+        {/* Top subscribe prompt */}
+        {subscribeEndpoint && (
+          <a
+            href="#subscribe"
+            className="mb-8 flex items-center justify-between gap-3 rounded-xl border px-4 py-3 transition-colors hover:opacity-90"
+            style={{ borderColor: '#A8C8D4', backgroundColor: 'rgba(168,200,212,0.14)' }}
+          >
+            <span className="text-sm text-stone-600">
+              📬 Get {location.name}&apos;s events in your inbox{' '}
+              <span className="font-semibold" style={{ color: '#1C3D55' }}>every Wednesday morning</span> — free.
+            </span>
+            <span
+              className="shrink-0 text-sm font-semibold text-white px-3.5 py-1.5 rounded-full"
+              style={{ backgroundColor: '#1C3D55' }}
+            >
+              Subscribe
+            </span>
+          </a>
+        )}
+
         {/* Error state */}
         {error && (
           <div className="mb-6 bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700">
@@ -54,7 +74,7 @@ export default async function LocationHome({ location }: { location: LocationDef
 
         {/* Weekly email signup */}
         {subscribeEndpoint && (
-          <div className="mt-10">
+          <div id="subscribe" className="mt-10 scroll-mt-24">
             <SubscribeForm endpoint={subscribeEndpoint} defaultTown={location.name} />
           </div>
         )}

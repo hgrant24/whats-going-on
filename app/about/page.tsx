@@ -1,18 +1,11 @@
 import Header from '@/components/Header';
 import Link from 'next/link';
 import { fetchEvents } from '@/lib/events';
+import { LOCATIONS, eventInLocation } from '@/lib/locations';
 
 export const metadata = {
-  title: "About | What's Going On",
+  title: 'About',
 };
-
-function hostname(url: string): string {
-  try {
-    return new URL(url).hostname.replace(/^www\./, '');
-  } catch {
-    return url;
-  }
-}
 
 // Show host + path so generic domains (facebook.com/PortsideTavern) are identifiable
 function displayUrl(url: string): string {
@@ -26,18 +19,32 @@ function displayUrl(url: string): string {
   }
 }
 
-export default async function AboutPage() {
-  const { events, rawSubmissions } = await fetchEvents();
+function joinTowns(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? '';
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  return `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`;
+}
 
-  // Collect unique source URLs from both approved events and raw submissions
-  const urlSet = new Set<string>();
-  for (const e of events) {
-    if (e.sourceLink && /^https?:\/\//i.test(e.sourceLink)) urlSet.add(e.sourceLink);
-  }
-  for (const s of rawSubmissions) {
-    if (s.link && /^https?:\/\//i.test(s.link)) urlSet.add(s.link);
-  }
-  const sources = Array.from(urlSet).sort((a, b) => hostname(a).localeCompare(hostname(b)));
+export default async function AboutPage() {
+  const { events } = await fetchEvents();
+
+  // Group the source links by hub so each town has its own list
+  const sourcesByTown = LOCATIONS.map(loc => {
+    const seen = new Set<string>();
+    const urls: { href: string; label: string }[] = [];
+    for (const e of events) {
+      if (!e.sourceLink || !/^https?:\/\//i.test(e.sourceLink)) continue;
+      if (!eventInLocation(e.location, loc)) continue;
+      const label = displayUrl(e.sourceLink);
+      if (seen.has(label)) continue;
+      seen.add(label);
+      urls.push({ href: e.sourceLink, label });
+    }
+    urls.sort((a, b) => a.label.localeCompare(b.label));
+    return { loc, urls };
+  }).filter(t => t.urls.length > 0);
+
+  const townList = joinTowns(LOCATIONS.map(l => l.name));
 
   return (
     <>
@@ -52,8 +59,9 @@ export default async function AboutPage() {
         <div className="prose prose-stone max-w-none text-stone-600 leading-relaxed space-y-4">
           <p>
             <strong className="text-stone-800">What&apos;s Going On</strong> is a community-powered
-            local events guide for Bristol and the East Bay of Rhode Island — covering Bristol,
-            Warren, Barrington, and nearby towns.
+            guide to local events — currently covering {townList}, with more towns on the way.
+            Pick your area from the menu at the top and you&apos;ll only see what&apos;s happening
+            near you.
           </p>
           <p>
             The idea is simple: one place to see what&apos;s happening locally, whether that&apos;s
@@ -61,9 +69,9 @@ export default async function AboutPage() {
             5K, or a waterfront festival.
           </p>
           <p>
-            Events are submitted by community members through a simple Google Form. We review
-            each submission and add it to the feed. If you know something happening locally,
-            please share it — this site is only as good as what the community puts into it.
+            Events are gathered from venue and community listings and submitted by people in each
+            town. If you know something happening locally, please share it — this site is only as
+            good as what the community puts into it.
           </p>
 
           <div className="bg-stone-50 border border-stone-200 rounded-xl p-4 mt-6">
@@ -76,26 +84,36 @@ export default async function AboutPage() {
           </div>
         </div>
 
-        {/* Sources — every website this guide pulls events from */}
-        {sources.length > 0 && (
+        {/* Sources — grouped by town */}
+        {sourcesByTown.length > 0 && (
           <section className="mt-10 pt-6 border-t border-stone-200">
-            <h2 className="text-xs font-bold tracking-widest text-stone-400 uppercase mb-3">
+            <h2 className="text-xs font-bold tracking-widest text-stone-400 uppercase mb-4">
               Where this info comes from
             </h2>
-            <ul className="space-y-1.5">
-              {sources.map((url, i) => (
-                <li key={i} className="text-sm">
-                  <a
-                    href={url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-stone-500 hover:text-[#1C3D55] transition-colors break-all"
-                  >
-                    {displayUrl(url)}
-                  </a>
-                </li>
+            <div className="space-y-5">
+              {sourcesByTown.map(({ loc, urls }) => (
+                <div key={loc.slug}>
+                  <h3 className="text-sm font-bold mb-1.5" style={{ color: '#1C3D55' }}>
+                    {loc.name}{' '}
+                    <span className="font-normal text-xs text-stone-400">· {loc.region}</span>
+                  </h3>
+                  <ul className="space-y-1.5">
+                    {urls.map((u, i) => (
+                      <li key={i} className="text-sm">
+                        <a
+                          href={u.href}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-stone-500 hover:text-[#1C3D55] transition-colors break-all"
+                        >
+                          {u.label}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               ))}
-            </ul>
+            </div>
           </section>
         )}
       </main>

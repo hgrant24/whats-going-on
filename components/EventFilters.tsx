@@ -53,13 +53,13 @@ export default function EventFilters({ filters, onChange, totalResults, towns }:
           type="button"
           onClick={() => onChange({ ...filters, freeOnly: !filters.freeOnly })}
           aria-pressed={filters.freeOnly}
-          title="Tara Mode — show only free events"
+          title="Show only free events (Tara Mode)"
           className="text-sm rounded-lg px-2.5 py-1.5 font-medium border transition-colors"
           style={filters.freeOnly
             ? { backgroundColor: '#1C3D55', color: 'white', borderColor: '#1C3D55' }
             : { backgroundColor: 'white', color: '#1C3D55', borderColor: '#d6d3d1' }}
         >
-          🆓 Tara Mode
+          🆓 Filter by free <span className="text-[10px] font-normal opacity-70">(Tara Mode)</span>
         </button>
 
         {hasActiveFilters && (
