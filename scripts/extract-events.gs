@@ -507,19 +507,21 @@ function callClaudeWithImage(base64, mimeType, sourceLabel, defaultTown) {
 // WRITE EVENTS
 // ═══════════════════════════════════════════════════════════════════════════
 
-function eventKey(venue, name, date, time) {
-  return [venue, name, date, time].map(s => {
-    if (s === null || s === undefined || s === '') return '';
-    if (s instanceof Date) return Utilities.formatDate(s, 'America/New_York', 'yyyy-MM-dd');
-    return String(s).toLowerCase().trim();
-  }).join('|');
+// Dedup key: date + normalized name + normalized venue (punctuation/time-format
+// differences are ignored so near-duplicates collapse).
+function eventKey(venue, name, date) {
+  const d = (date instanceof Date)
+    ? Utilities.formatDate(date, 'America/New_York', 'yyyy-MM-dd')
+    : (date || '').toString().trim();
+  const norm = s => (s || '').toString().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  return d + '|' + norm(name) + '|' + norm(venue);
 }
 
 function buildExistingKeys(approvedSheet) {
   const keys = new Set();
   const vals = approvedSheet.getDataRange().getValues();
   for (let i = 1; i < vals.length; i++) {
-    const k = eventKey(vals[i][1], vals[i][0], vals[i][4], vals[i][5]);
+    const k = eventKey(vals[i][1], vals[i][0], vals[i][4]);
     if (k.length > 3) keys.add(k);
   }
   return keys;
@@ -585,7 +587,7 @@ function writeEvents(approvedSheet, events, sourceUrl, submittedBy, existingKeys
     // Require a date OR a recurring flag (undated recurring → "Always Happening")
     if (!e.startDate && !e.isRecurring) continue;
     if (e.startDate && e.startDate < cutoff) continue;
-    const key = eventKey(e.venue, e.name, e.startDate, e.startTime);
+    const key = eventKey(e.venue, e.name, e.startDate);
     if (existingKeys.has(key)) continue;
     existingKeys.add(key);
 
@@ -1085,8 +1087,15 @@ function gatherUpcomingEvents(town) {
       description: (rows[i][ci.desc] || '').toString(),
     });
   }
-  evs.sort((a, b) => (a.startDate + a.startTime).localeCompare(b.startDate + b.startTime));
-  return evs;
+  // Collapse near-duplicates (same date + name + venue, punctuation/time-format ignored)
+  const norm = s => (s || '').toString().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const seen = {}, unique = [];
+  evs.forEach(e => {
+    const k = e.startDate + '|' + norm(e.name) + '|' + norm(e.venue);
+    if (!seen[k]) { seen[k] = true; unique.push(e); }
+  });
+  unique.sort((a, b) => (a.startDate + a.startTime).localeCompare(b.startDate + b.startTime));
+  return unique;
 }
 
 // Google Calendar "add" link for one event (same as the site's buttons)
@@ -1266,6 +1275,25 @@ function resetErrors() { _resetRows(s => s.startsWith('error') || isStuckProcess
 
 /** Clear rows that finished with 0 events (e.g. short notes wrongly skipped) → retry them. */
 function resetEmpty()  { _resetRows(s => /0 events/i.test(s)); }
+
+// One-time cleanup: delete duplicate rows already in the Approved Events tab
+// (same date + name + venue, ignoring punctuation/time-format). Keeps the first.
+function dedupeApprovedEvents() {
+  const ss    = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = getOrCreateApprovedSheet(ss);
+  const data  = sheet.getDataRange().getValues();
+  const seen  = {};
+  const toDelete = [];
+  for (let i = 1; i < data.length; i++) {
+    // cols: 0=name, 1=venue, 4=start date
+    const k = eventKey(data[i][1], data[i][0], data[i][4]);
+    if (k.length <= 3) continue; // skip blank rows
+    if (seen[k]) toDelete.push(i + 1); else seen[k] = true;
+  }
+  // Delete bottom-up so row indices stay valid
+  for (let j = toDelete.length - 1; j >= 0; j--) sheet.deleteRow(toDelete[j]);
+  Logger.log('Removed ' + toDelete.length + ' duplicate event rows.');
+}
 
 // ── One-time migration: tag every existing Approved Events row with its hub ──
 // Classifies by TOWN first (most reliable), then by Source-link domain for rows

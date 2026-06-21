@@ -122,6 +122,25 @@ function parseRawRows(rows: Record<string, string>[]): RawSubmission[] {
   });
 }
 
+// Normalize a string for dedup comparison: lowercase, strip punctuation, collapse spaces
+function normToken(s: string | null): string {
+  return (s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+// Collapse near-duplicate events (same hub + date + name + venue, ignoring
+// time-format / punctuation differences). Keeps the first occurrence.
+function dedupeEvents(events: Event[]): Event[] {
+  const seen = new Set<string>();
+  const out: Event[] = [];
+  for (const e of events) {
+    const key = [e.location ?? '', e.startDate ?? '', normToken(e.name), normToken(e.venue)].join('|');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(e);
+  }
+  return out;
+}
+
 export async function fetchEvents(): Promise<EventsData> {
   const csvUrl = process.env.GOOGLE_SHEET_CSV_URL;
   const rawUrl = process.env.RAW_SUBMISSIONS_CSV_URL;
@@ -169,10 +188,12 @@ export async function fetchEvents(): Promise<EventsData> {
 
   if (isApprovedSheet) {
     const today = getTodayISO();
-    const events = parseApprovedRows(rows).filter(e => {
-      if (e.isRecurring || !e.startDate) return true;
-      return e.startDate >= today;
-    });
+    const events = dedupeEvents(
+      parseApprovedRows(rows).filter(e => {
+        if (e.isRecurring || !e.startDate) return true;
+        return e.startDate >= today;
+      })
+    );
 
     let rawSubmissions: RawSubmission[] = [];
     if (rawUrl) {
