@@ -818,7 +818,9 @@ function setupTriggers() {
   ScriptApp.newTrigger('onFormSubmitHandler').forSpreadsheet(ss).onFormSubmit().create();
   ScriptApp.newTrigger('weeklyRecheck').timeBased().onWeekDay(ScriptApp.WeekDay.SUNDAY)
     .atHour(6).inTimezone('America/New_York').create();
-  Logger.log('✓ Triggers set: onFormSubmit + Sunday 6 AM ET');
+  ScriptApp.newTrigger('sendWeeklyEmails').timeBased().onWeekDay(ScriptApp.WeekDay.WEDNESDAY)
+    .atHour(8).inTimezone('America/New_York').create();
+  Logger.log('✓ Triggers set: onFormSubmit + Sunday 6 AM recheck + Wednesday 8 AM email');
 }
 
 function onFormSubmitHandler(e) {
@@ -837,15 +839,18 @@ function onFormSubmitHandler(e) {
 //
 // Re-deploy (Deploy → Manage deployments → edit → Version: New) after any change.
 
-function doGet() {
+function doGet(e) {
+  const p = (e && e.parameter) ? e.parameter : {};
+  if (p.unsub) return handleUnsub(p.unsub, p.town || '');
   return ContentService
-    .createTextOutput(JSON.stringify({ ok: true, service: "What's Going On submit endpoint" }))
+    .createTextOutput(JSON.stringify({ ok: true, service: "What's Going On endpoint" }))
     .setMimeType(ContentService.MimeType.JSON);
 }
 
 function doPost(e) {
   try {
     const p = (e && e.parameter) ? e.parameter : {};
+    if ((p.kind || '') === 'subscribe') return handleSubscribe(p);
     const url      = (p.url      || '').toString().trim();
     const notes    = (p.notes    || '').toString().trim();
     const name     = (p.name     || '').toString().trim();
@@ -925,6 +930,255 @@ function getSubmitFolder() {
   const FOLDER = "What's Going On Submissions";
   const it = DriveApp.getFoldersByName(FOLDER);
   return it.hasNext() ? it.next() : DriveApp.createFolder(FOLDER);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EMAIL SUBSCRIPTIONS  (weekly digest via Resend, Wednesday 8 AM)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Setup (one-time):
+//   1. Verify your domain in Resend (resend.com) and create an API key
+//   2. Script Properties → add:
+//        RESEND_API_KEY = re_...
+//        RESEND_FROM    = What's Going On <events@hansonsguide.com>   (a from-address on your verified domain)
+//        WEB_APP_URL    = your /exec URL   (optional; used for unsubscribe links)
+//   3. Run setupTriggers once to schedule the Wednesday 8 AM send
+//   4. Run sendWeeklyTest to preview (emails just you)
+
+const SUBSCRIBERS_SHEET = 'Subscribers';
+
+function getOrCreateSubscribersSheet(ss) {
+  let sheet = ss.getSheetByName(SUBSCRIBERS_SHEET);
+  if (!sheet) {
+    sheet = ss.insertSheet(SUBSCRIBERS_SHEET);
+    sheet.getRange(1, 1, 1, 4).setValues([['Email', 'Town', 'Status', 'Subscribed']]).setFontWeight('bold');
+  }
+  return sheet;
+}
+
+// Subscribe (called from the site's subscribe form via doPost kind=subscribe)
+function handleSubscribe(p) {
+  const email = (p.email || '').toString().trim().toLowerCase();
+  const town  = (p.town  || '').toString().trim() || 'Bristol';
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return jsonOut({ ok: false, error: 'invalid email' });
+
+  const ss    = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = getOrCreateSubscribersSheet(ss);
+  const data  = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if ((data[i][0] || '').toString().trim().toLowerCase() === email &&
+        (data[i][1] || '').toString().trim() === town) {
+      sheet.getRange(i + 1, 3).setValue('active'); // re-activate if they'd unsubscribed
+      return jsonOut({ ok: true, already: true });
+    }
+  }
+  sheet.appendRow([email, town, 'active', new Date()]);
+  return jsonOut({ ok: true });
+}
+
+// Unsubscribe (GET link in every email)
+function handleUnsub(email, town) {
+  email = (email || '').toString().trim().toLowerCase();
+  const ss    = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SUBSCRIBERS_SHEET);
+  let n = 0;
+  if (sheet) {
+    const data = sheet.getDataRange().getValues();
+    for (let i = 1; i < data.length; i++) {
+      const e = (data[i][0] || '').toString().trim().toLowerCase();
+      const t = (data[i][1] || '').toString().trim();
+      if (e === email && (!town || t === town)) { sheet.getRange(i + 1, 3).setValue('unsubscribed'); n++; }
+    }
+  }
+  const msg = n
+    ? "You won't get any more What's Going On emails" + (town ? ' for ' + esc(town) : '') + '.'
+    : "That address wasn't on the list.";
+  return ContentService.createTextOutput(
+    '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<div style="font-family:system-ui,sans-serif;max-width:480px;margin:60px auto;text-align:center;color:#1C3D55">' +
+    '<h2>You\'re unsubscribed</h2><p style="color:#666">' + msg + '</p>' +
+    '<p><a href="https://www.hansonsguide.com" style="color:#5B9BAE">&larr; Back to What\'s Going On</a></p></div>'
+  ).setMimeType(ContentService.MimeType.HTML);
+}
+
+function webAppUrl() {
+  return PropertiesService.getScriptProperties().getProperty('WEB_APP_URL') ||
+    (ScriptApp.getService() && ScriptApp.getService().getUrl()) || '';
+}
+
+function esc(s) {
+  return (s || '').toString()
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function fmtCell(v) {
+  if (v instanceof Date) return Utilities.formatDate(v, 'America/New_York', 'HH:mm');
+  return (v || '').toString().trim();
+}
+
+function townSlug(town) {
+  return (town || '').toString().toLowerCase().trim().replace(/\s+/g, '-');
+}
+
+// Next-7-days events for a hub (same hub-matching rule as the website)
+function gatherUpcomingEvents(town) {
+  const ss       = SpreadsheetApp.getActiveSpreadsheet();
+  const approved = getOrCreateApprovedSheet(ss);
+  const rows     = approved.getDataRange().getValues();
+  const h        = rows[0];
+  const col = name => h.findIndex(x => x.toString().trim().toLowerCase() === name);
+  const ci = {
+    name: col('event name'), venue: col('venue'), town: col('town'), date: col('start date'),
+    st: col('start time'), et: col('end time'), rec: col('recurring?'), desc: col('description'), loc: col('location'),
+  };
+  const tz    = 'America/New_York';
+  const today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+  const end   = Utilities.formatDate(new Date(Date.now() + 7 * 86400000), tz, 'yyyy-MM-dd');
+
+  const evs = [];
+  for (let i = 1; i < rows.length; i++) {
+    const loc   = (rows[i][ci.loc] || '').toString().trim();
+    const inHub = loc ? (loc.toLowerCase() === town.toLowerCase()) : (town.toLowerCase() === 'bristol');
+    if (!inHub) continue;
+    let date = rows[i][ci.date];
+    if (date instanceof Date) date = Utilities.formatDate(date, tz, 'yyyy-MM-dd');
+    date = (date || '').toString().trim();
+    if (!date || date < today || date > end) continue;
+    evs.push({
+      name: (rows[i][ci.name] || '').toString(), venue: (rows[i][ci.venue] || '').toString(),
+      town: (rows[i][ci.town] || '').toString(), startDate: date,
+      startTime: fmtCell(rows[i][ci.st]), endTime: fmtCell(rows[i][ci.et]),
+      isRecurring: (rows[i][ci.rec] || '').toString().toLowerCase() === 'yes',
+      description: (rows[i][ci.desc] || '').toString(),
+    });
+  }
+  evs.sort((a, b) => (a.startDate + a.startTime).localeCompare(b.startDate + b.startTime));
+  return evs;
+}
+
+// Google Calendar "add" link for one event (same as the site's buttons)
+function emailGcalUrl(ev) {
+  if (!ev.startDate) return '';
+  const ymd = s => s.replace(/-/g, '');
+  const tp  = t => { const m = (t || '').match(/^(\d{1,2}):(\d{2})/); return m ? (m[1] + m[2] + '00').padStart(6, '0') : ''; };
+  const p = { action: 'TEMPLATE', text: ev.name };
+  const st = tp(ev.startTime);
+  if (st) {
+    let et = tp(ev.endTime);
+    if (!et) { const m = (ev.startTime || '').match(/^(\d{1,2}):(\d{2})/); let hh = parseInt(m[1], 10) + 2; if (hh > 23) hh = 23; et = (String(hh).padStart(2, '0') + m[2] + '00'); }
+    p.dates = ymd(ev.startDate) + 'T' + st + '/' + ymd(ev.startDate) + 'T' + et;
+    p.ctz = 'America/New_York';
+  } else {
+    const a = ev.startDate.split('-').map(Number); const nd = new Date(a[0], a[1] - 1, a[2] + 1);
+    p.dates = ymd(ev.startDate) + '/' + ('' + nd.getFullYear() + String(nd.getMonth() + 1).padStart(2, '0') + String(nd.getDate()).padStart(2, '0'));
+  }
+  const loc = [ev.venue, ev.town].filter(Boolean).join(', '); if (loc) p.location = loc;
+  p.details = [ev.description, 'via hansonsguide.com'].filter(Boolean).join('\n\n');
+  if (ev.isRecurring) {
+    const a = ev.startDate.split('-').map(Number); const wd = new Date(a[0], a[1] - 1, a[2]).getDay();
+    const byday = ['SU','MO','TU','WE','TH','FR','SA'][wd];
+    if (byday) p.recur = 'RRULE:FREQ=WEEKLY;BYDAY=' + byday;
+  }
+  return 'https://calendar.google.com/calendar/render?' +
+    Object.keys(p).map(k => encodeURIComponent(k) + '=' + encodeURIComponent(p[k])).join('&');
+}
+
+function buildEmailBody(town, evs) {
+  const tz = 'America/New_York';
+  const fmtTime = t => { const m = (t || '').match(/^(\d{1,2}):(\d{2})/); if (!m) return ''; let hh = parseInt(m[1], 10); const mn = m[2]; const ap = hh >= 12 ? 'PM' : 'AM'; hh = hh % 12 || 12; return mn === '00' ? (hh + ' ' + ap) : (hh + ':' + mn + ' ' + ap); };
+  const dayName = iso => { const a = iso.split('-').map(Number); return Utilities.formatDate(new Date(a[0], a[1] - 1, a[2]), tz, 'EEEE, MMM d'); };
+
+  let html = '<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:560px;margin:0 auto;color:#1C3D55;background:#F4EFE9;padding:24px;border-radius:12px">';
+  html += '<h1 style="font-size:22px;margin:0 0 2px">What\'s Going On in ' + esc(town) + '</h1>';
+  html += '<p style="color:#777;margin:0 0 18px;font-size:14px">The next 7 days &middot; ' + evs.length + ' event' + (evs.length === 1 ? '' : 's') + '</p>';
+  let curDay = '';
+  evs.forEach(ev => {
+    if (ev.startDate !== curDay) {
+      curDay = ev.startDate;
+      html += '<h2 style="font-size:15px;color:#1C3D55;border-bottom:1px solid #A8C8D4;padding-bottom:4px;margin:18px 0 8px">' + esc(dayName(ev.startDate)) + '</h2>';
+    }
+    const time = fmtTime(ev.startTime);
+    const cal  = emailGcalUrl(ev);
+    html += '<div style="margin:0 0 14px">';
+    html += '<div style="font-weight:600;font-size:15px">' + esc(ev.name) + '</div>';
+    html += '<div style="color:#666;font-size:13px">' + [esc(ev.venue), esc(time)].filter(Boolean).join(' &middot; ') + '</div>';
+    if (cal) html += '<a href="' + cal + '" style="color:#5B9BAE;font-size:12px;font-weight:600;text-decoration:none">+ Add to Google Calendar</a>';
+    html += '</div>';
+  });
+  const path = town.toLowerCase() === 'bristol' ? '' : '/' + townSlug(town);
+  html += '<div style="margin-top:22px;padding-top:12px;border-top:1px solid #ddd"><a href="https://www.hansonsguide.com' + path + '" style="color:#5B9BAE;font-weight:600;text-decoration:none">See everything on the site &rarr;</a></div>';
+  return html; // NOTE: closing </div> added by unsubFooter
+}
+
+function unsubFooter(email, town) {
+  const url = webAppUrl() + '?unsub=' + encodeURIComponent(email) + '&town=' + encodeURIComponent(town);
+  return '<p style="color:#aaa;font-size:11px;margin-top:18px;text-align:center;font-family:sans-serif">' +
+    'You subscribed to ' + esc(town) + ' events on hansonsguide.com.<br>' +
+    '<a href="' + url + '" style="color:#aaa">Unsubscribe</a></p></div>';
+}
+
+function sendResend(key, from, to, subject, html) {
+  const resp = UrlFetchApp.fetch('https://api.resend.com/emails', {
+    method: 'post', contentType: 'application/json',
+    headers: { Authorization: 'Bearer ' + key },
+    payload: JSON.stringify({ from: from, to: [to], subject: subject, html: html }),
+    muteHttpExceptions: true,
+  });
+  if (resp.getResponseCode() >= 300) {
+    Logger.log('Resend error ' + resp.getResponseCode() + ' for ' + to + ': ' + resp.getContentText().substring(0, 200));
+    return false;
+  }
+  return true;
+}
+
+// Wednesday 8 AM trigger → one digest per town to its active subscribers
+function sendWeeklyEmails() {
+  const props = PropertiesService.getScriptProperties();
+  const key   = props.getProperty('RESEND_API_KEY');
+  if (!key) { Logger.log('RESEND_API_KEY not set — skipping weekly email.'); return; }
+  const from  = props.getProperty('RESEND_FROM') || "What's Going On <events@hansonsguide.com>";
+
+  const ss       = SpreadsheetApp.getActiveSpreadsheet();
+  const subSheet = ss.getSheetByName(SUBSCRIBERS_SHEET);
+  if (!subSheet) { Logger.log('No Subscribers sheet yet.'); return; }
+
+  const subs = subSheet.getDataRange().getValues();
+  const byTown = {};
+  for (let i = 1; i < subs.length; i++) {
+    const email  = (subs[i][0] || '').toString().trim();
+    const town   = (subs[i][1] || '').toString().trim() || 'Bristol';
+    const status = (subs[i][2] || '').toString().trim().toLowerCase();
+    if (!email || status === 'unsubscribed') continue;
+    (byTown[town] = byTown[town] || []).push(email);
+  }
+
+  let sentTotal = 0;
+  for (const town in byTown) {
+    const evs = gatherUpcomingEvents(town);
+    if (!evs.length) { Logger.log('No upcoming events for ' + town + ' — skipping send.'); continue; }
+    const body    = buildEmailBody(town, evs);
+    const subject = 'This week in ' + town + ': ' + evs.length + ' thing' + (evs.length === 1 ? '' : 's') + ' to do';
+    for (const email of byTown[town]) {
+      if (sendResend(key, from, email, subject, body + unsubFooter(email, town))) sentTotal++;
+      Utilities.sleep(600); // stay under Resend rate limits
+    }
+    Logger.log('Sent ' + byTown[town].length + ' for ' + town + ' (' + evs.length + ' events)');
+  }
+  Logger.log('Weekly email done. Total sent: ' + sentTotal);
+}
+
+// Preview: emails this week's Bristol digest to YOU only
+function sendWeeklyTest() {
+  const props = PropertiesService.getScriptProperties();
+  const key   = props.getProperty('RESEND_API_KEY');
+  if (!key) { Logger.log('Set RESEND_API_KEY first.'); return; }
+  const from  = props.getProperty('RESEND_FROM') || "What's Going On <events@hansonsguide.com>";
+  const me    = Session.getActiveUser().getEmail();
+  const town  = 'Bristol';
+  const evs   = gatherUpcomingEvents(town);
+  if (!evs.length) { Logger.log('No upcoming events for ' + town + ' in the next 7 days.'); return; }
+  const ok = sendResend(key, from, me, '[TEST] This week in ' + town, buildEmailBody(town, evs) + unsubFooter(me, town));
+  Logger.log(ok ? ('Test sent to ' + me + ' (' + evs.length + ' events)') : 'Test send failed — check log.');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

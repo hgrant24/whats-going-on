@@ -3,6 +3,7 @@ import { buildEventsJsonLd } from '@/lib/seo';
 import { LocationDef, eventInLocation, locationPath } from '@/lib/locations';
 import Header from '@/components/Header';
 import EventsClient from '@/components/EventsClient';
+import SubscribeForm from '@/components/SubscribeForm';
 
 const REPORT_EMAIL = 'hansongrant1@gmail.com';
 
@@ -16,6 +17,7 @@ export default async function LocationHome({ location }: { location: LocationDef
 
   const submitHref =
     locationPath(location) === '/' ? '/submit' : `/submit?loc=${location.slug}`;
+  const subscribeEndpoint = process.env.NEXT_PUBLIC_SUBMIT_ENDPOINT;
 
   return (
     <>
@@ -49,6 +51,13 @@ export default async function LocationHome({ location }: { location: LocationDef
           submitHref={submitHref}
           areaName={location.name}
         />
+
+        {/* Weekly email signup */}
+        {subscribeEndpoint && (
+          <div className="mt-10">
+            <SubscribeForm endpoint={subscribeEndpoint} defaultTown={location.name} />
+          </div>
+        )}
       </main>
 
       <footer className="mt-16 border-t border-stone-200 bg-white">
