@@ -1,5 +1,6 @@
 import Papa from 'papaparse';
 import { Event, EventsData, GroupedEvents, RawSubmission } from '@/types/event';
+import { LOCATIONS, eventInLocation } from '@/lib/locations';
 
 function normalizeKey(key: string): string {
   return key.toLowerCase().trim().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
@@ -127,13 +128,21 @@ function normToken(s: string | null): string {
   return (s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
+// Resolve an event's effective hub slug. Blank/untagged events fall to the
+// default hub — the SAME rule used for display — so a "Bristol"-tagged row and
+// a blank-tagged row of the same event collapse together instead of both showing.
+function effectiveHubSlug(loc: string | null): string {
+  const hub = LOCATIONS.find(l => eventInLocation(loc, l));
+  return hub ? hub.slug : '_none';
+}
+
 // Collapse near-duplicate events (same hub + date + name + venue, ignoring
-// time-format / punctuation differences). Keeps the first occurrence.
+// time-format / punctuation / location-tag differences). Keeps the first.
 function dedupeEvents(events: Event[]): Event[] {
   const seen = new Set<string>();
   const out: Event[] = [];
   for (const e of events) {
-    const key = [e.location ?? '', e.startDate ?? '', normToken(e.name), normToken(e.venue)].join('|');
+    const key = [effectiveHubSlug(e.location), e.startDate ?? '', normToken(e.name), normToken(e.venue)].join('|');
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(e);
