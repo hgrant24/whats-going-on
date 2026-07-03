@@ -679,7 +679,34 @@ function processNewSubmissions() {
   const today        = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
   let totalAdded = 0;
 
-  for (let row = 1; row < data.length; row++) {
+  // Build the work list. New submissions / errors / stuck-processing rows go
+  // BEFORE 'recheck' rows, so a fresh submission is never starved behind the
+  // weekly re-scan backlog (and reaches Claude before any timeout).
+  const work = [];
+  for (let r = 1; r < data.length; r++) {
+    const u  = urlCol   !== -1 ? (data[r][urlCol]   || '').toString().trim() : '';
+    const n  = notesCol !== -1 ? (data[r][notesCol] || '').toString().trim() : '';
+    const im = imageCol !== -1 ? (data[r][imageCol] || '').toString().trim() : '';
+    if (!u && !n && !im) continue;
+    const st = (data[r][processedCol - 1] || '').toString().trim();
+    if (st.startsWith('done')) continue;
+    if (st.startsWith('held')) continue; // flood-guard rows wait for releaseHeld()
+    if (st.startsWith('processing') && !isStuckProcessing(st)) continue;
+    work.push({ row: r, isRecheck: st.startsWith('recheck') });
+  }
+  work.sort(function (a, b) { return (a.isRecheck ? 1 : 0) - (b.isRecheck ? 1 : 0); });
+
+  // Stop cleanly before Apps Script's ~6-minute hard limit — a hard kill leaves a
+  // row stuck on 'processing'. Anything left over runs on the next trigger.
+  const startTime  = Date.now();
+  const MAX_RUN_MS = 5 * 60 * 1000;
+
+  for (let w = 0; w < work.length; w++) {
+    if (Date.now() - startTime > MAX_RUN_MS) {
+      Logger.log('Time budget reached — ' + (work.length - w) + ' row(s) left for the next run.');
+      break;
+    }
+    const row         = work[w].row;
     const url         = urlCol         !== -1 ? (data[row][urlCol]         || '').toString().trim() : '';
     const notes       = notesCol       !== -1 ? (data[row][notesCol]       || '').toString().trim() : '';
     const imageValue  = imageCol       !== -1 ? (data[row][imageCol]       || '').toString().trim() : '';
@@ -689,11 +716,6 @@ function processNewSubmissions() {
     const status      = (data[row][processedCol - 1] || '').toString().trim();
     const prevRescan  = rescanCol !== -1 ? (data[row][rescanCol] || '').toString().trim() : '';
     const wasRecheck  = status.startsWith('recheck');
-
-    // Need at least one input
-    if (!url && !notes && !imageValue) continue;
-    if (status.startsWith('done')) continue;
-    if (status.startsWith('processing') && !isStuckProcessing(status)) continue;
 
     const sources = [url && 'URL', notes && 'notes', imageValue && 'image'].filter(Boolean).join('+');
     Logger.log('[Row ' + (row + 1) + '] Processing (' + sources + ')'
@@ -763,7 +785,7 @@ function processNewSubmissions() {
       rawSheet.getRange(row + 1, processedCol).setValue('error: ' + err.message.substring(0, 120));
     }
 
-    if (row < data.length - 1) Utilities.sleep(2000);
+    if (w < work.length - 1) Utilities.sleep(2000);
   }
 
   Logger.log('Finished. Total new events added: ' + totalAdded);
@@ -830,6 +852,40 @@ function onFormSubmitHandler(e) {
   processNewSubmissions();
 }
 
+// Kick off extraction ~8 seconds after a web-app submit, so doPost can return
+// instantly. De-duped: if a run is already queued, the new row just rides along
+// with it — a burst of submissions won't pile up triggers.
+function scheduleBackgroundProcessing() {
+  try {
+    const queued = ScriptApp.getProjectTriggers()
+      .some(t => t.getHandlerFunction() === 'processQueuedSubmissions');
+    if (queued) return;
+    ScriptApp.newTrigger('processQueuedSubmissions').timeBased().after(8 * 1000).create();
+  } catch (err) {
+    // If a trigger can't be created (e.g. trigger quota), fall back to inline
+    // processing so the submission is still handled — slower, but never dropped.
+    Logger.log('scheduleBackgroundProcessing failed, processing inline: ' + err);
+    try { processNewSubmissions(); } catch (e2) { Logger.log('inline fallback failed: ' + e2); }
+  }
+}
+
+// Fired by the one-off background trigger. Deletes spent one-off triggers (this
+// one included — it has already fired) so they never accumulate, then processes.
+function processQueuedSubmissions() {
+  ScriptApp.getProjectTriggers().forEach(t => {
+    if (t.getHandlerFunction() === 'processQueuedSubmissions') ScriptApp.deleteTrigger(t);
+  });
+  processNewSubmissions();
+}
+
+// Sliding-window counter in the script cache (used by the flood guards).
+function bumpCounter(key, ttlSec) {
+  const cache = CacheService.getScriptCache();
+  const n = parseInt(cache.get(key) || '0', 10) + 1;
+  cache.put(key, String(n), ttlSec);
+  return n;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // WEB APP ENDPOINT  (native submit form on hansonsguide.com posts here)
 // ═══════════════════════════════════════════════════════════════════════════
@@ -852,14 +908,24 @@ function doGet(e) {
 function doPost(e) {
   try {
     const p = (e && e.parameter) ? e.parameter : {};
+
+    // Honeypot: a hidden field real visitors never see. If a bot filled it,
+    // accept silently (no hint it was caught) and store nothing.
+    if ((p.topic || '').toString().trim()) return jsonOut({ ok: true });
+
     if ((p.kind || '') === 'subscribe') return handleSubscribe(p);
-    const url      = (p.url      || '').toString().trim();
-    const notes    = (p.notes    || '').toString().trim();
-    const name     = (p.name     || '').toString().trim();
-    const location = (p.location || '').toString().trim();
+
+    // Cap sizes so a hostile payload can't inflate Claude cost or the sheet.
+    const url      = (p.url      || '').toString().trim().substring(0, 1000);
+    const notes    = (p.notes    || '').toString().trim().substring(0, 8000);
+    const name     = (p.name     || '').toString().trim().substring(0, 100);
+    const location = (p.location || '').toString().trim().substring(0, 40);
 
     if (!url && !notes && !p.imageData) {
       return jsonOut({ ok: false, error: 'Empty submission' });
+    }
+    if (p.imageData && p.imageData.length > 15000000) {
+      return jsonOut({ ok: false, error: 'Image too large' });
     }
 
     // Optional photo (base64 from the browser) → saved to Drive
@@ -892,10 +958,19 @@ function doPost(e) {
     rawSheet.appendRow(row);
     SpreadsheetApp.flush();
 
-    // Process immediately (programmatic appends don't fire the onFormSubmit trigger).
-    // Wrapped so a processing hiccup never fails the submission — the row is saved
-    // and the weekly/manual run will still pick it up.
-    try { processNewSubmissions(); } catch (err) { Logger.log('post-submit processing failed: ' + err); }
+    // Flood guard: legit traffic is a handful of submissions a day. Past 8 in
+    // 10 minutes, keep saving rows (nothing is lost) but hold them out of the
+    // Claude pipeline — run releaseHeld() to review + process them after.
+    if (bumpCounter('wg_submits', 600) > 8) {
+      const pc = getOrAddProcessedCol(rawSheet);
+      rawSheet.getRange(rawSheet.getLastRow(), pc).setValue('held — flood guard (run releaseHeld)');
+      return jsonOut({ ok: true });
+    }
+
+    // The row is now durably saved, so a refresh / closed tab can't lose it.
+    // Hand the slow part (page fetch + Claude) to a background trigger and return
+    // immediately, so the submitter never waits on extraction.
+    scheduleBackgroundProcessing();
 
     return jsonOut({ ok: true });
   } catch (err) {
@@ -958,34 +1033,55 @@ function getOrCreateSubscribersSheet(ss) {
   return sheet;
 }
 
+// Hub names the site actually runs — keep in sync with lib/locations.ts.
+// Unknown towns in a subscribe request are dropped (bots probe with junk).
+const KNOWN_HUBS = ['Bristol', 'Sagamore Beach', 'Somerville', 'Saratoga'];
+
 // Subscribe (called from the site's subscribe form via doPost kind=subscribe)
 function handleSubscribe(p) {
-  const email = (p.email || '').toString().trim().toLowerCase();
+  const email = (p.email || '').toString().trim().toLowerCase().substring(0, 200);
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return jsonOut({ ok: false, error: 'invalid email' });
 
-  // Accept multiple towns: "towns" (comma-separated) or a single "town"
-  const raw   = (p.towns || p.town || 'Bristol').toString();
-  const towns = raw.split(',').map(t => t.trim()).filter(Boolean);
+  // Accept multiple towns ("towns" comma-separated, or single "town"),
+  // but only hubs we actually run — mapped onto their canonical names.
+  const canonical = {};
+  KNOWN_HUBS.forEach(h => { canonical[h.toLowerCase()] = h; });
+  const raw = (p.towns || p.town || 'Bristol').toString().substring(0, 200);
+  let towns = raw.split(',').map(t => canonical[t.trim().toLowerCase()]).filter(Boolean);
+  towns = towns.filter((t, i) => towns.indexOf(t) === i); // dedupe
   if (!towns.length) towns.push('Bristol');
 
   const ss    = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = getOrCreateSubscribersSheet(ss);
   const data  = sheet.getDataRange().getValues();
 
+  // Track which towns are actually NEW for this email (not already active),
+  // so repeat submits and abuse can't fire endless welcome emails.
+  const newTowns = [];
   towns.forEach(town => {
     let found = false;
     for (let i = 1; i < data.length; i++) {
       if ((data[i][0] || '').toString().trim().toLowerCase() === email &&
           (data[i][1] || '').toString().trim() === town) {
-        sheet.getRange(i + 1, 3).setValue('active'); // re-activate if previously unsubscribed
-        found = true; break;
+        found = true;
+        if ((data[i][2] || '').toString().trim() !== 'active') {
+          sheet.getRange(i + 1, 3).setValue('active'); // re-activate after an unsubscribe
+          newTowns.push(town);
+        }
+        break;
       }
     }
-    if (!found) sheet.appendRow([email, town, 'active', new Date()]);
+    if (!found) { sheet.appendRow([email, town, 'active', new Date()]); newTowns.push(town); }
   });
 
-  // Immediate welcome email so they see exactly what they signed up for
-  try { sendWelcomeEmail(email, towns); } catch (err) { Logger.log('welcome email failed: ' + err); }
+  // Welcome email — only when something actually changed, at most one per
+  // address per hour, and never during a subscribe flood (bot bursts).
+  const flooded = bumpCounter('wg_subs', 3600) > 30;
+  const cache   = CacheService.getScriptCache();
+  if (newTowns.length && !flooded && !cache.get('wl_' + email)) {
+    cache.put('wl_' + email, '1', 3600);
+    try { sendWelcomeEmail(email, newTowns); } catch (err) { Logger.log('welcome email failed: ' + err); }
+  }
 
   return jsonOut({ ok: true, towns: towns });
 }
@@ -1275,6 +1371,7 @@ function resetErrors() { _resetRows(s => s.startsWith('error') || isStuckProcess
 
 /** Clear rows that finished with 0 events (e.g. short notes wrongly skipped) → retry them. */
 function resetEmpty()  { _resetRows(s => /0 events/i.test(s)); }
+function releaseHeld() { _resetRows(s => s.startsWith('held')); processNewSubmissions(); }
 
 // One-time cleanup: delete duplicate rows already in the Approved Events tab
 // (same date + name + venue, ignoring punctuation/time-format). Keeps the first.

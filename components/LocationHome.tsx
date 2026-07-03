@@ -13,7 +13,7 @@ export default async function LocationHome({ location }: { location: LocationDef
   // Only this hub's events — no overlap between locations
   const locEvents = events.filter(e => eventInLocation(e.location, location));
   const grouped = groupEvents(locEvents);
-  const jsonLd = buildEventsJsonLd(locEvents);
+  const jsonLd = buildEventsJsonLd(locEvents, location);
 
   const submitHref =
     locationPath(location) === '/' ? '/submit' : `/submit?loc=${location.slug}`;

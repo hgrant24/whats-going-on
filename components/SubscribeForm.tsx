@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { LOCATIONS } from '@/lib/locations';
 
 interface Props {
@@ -13,6 +13,7 @@ export default function SubscribeForm({ endpoint, defaultTown }: Props) {
   const [towns, setTowns] = useState<string[]>([defaultTown]);
   const [status, setStatus] = useState<'idle' | 'submitting' | 'done' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState('');
+  const honeypotRef = useRef<HTMLInputElement>(null);
 
   function toggleTown(name: string) {
     setTowns(prev => (prev.includes(name) ? prev.filter(t => t !== name) : [...prev, name]));
@@ -36,6 +37,7 @@ export default function SubscribeForm({ endpoint, defaultTown }: Props) {
       body.set('kind', 'subscribe');
       body.set('email', email.trim());
       body.set('towns', towns.join(','));
+      body.set('topic', honeypotRef.current?.value ?? ''); // honeypot — humans leave it empty
       await fetch(endpoint, { method: 'POST', mode: 'no-cors', body });
       setStatus('done');
       setEmail('');
@@ -59,6 +61,14 @@ export default function SubscribeForm({ endpoint, defaultTown }: Props) {
 
   return (
     <form onSubmit={handleSubmit} className="rounded-xl border border-stone-200 bg-white p-5">
+      {/* Honeypot — invisible to people; bots that fill it are silently dropped */}
+      <div aria-hidden="true" className="absolute -left-[9999px] h-px w-px overflow-hidden">
+        <label>
+          Topic
+          <input ref={honeypotRef} type="text" name="topic" tabIndex={-1} autoComplete="off" />
+        </label>
+      </div>
+
       <h2 className="text-base font-bold" style={{ color: '#1C3D55' }}>Get the week ahead by email</h2>
       <p className="mt-1 mb-3 text-sm text-stone-500">
         A free Wednesday-morning rundown of what&apos;s happening — pick any areas you want.

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
 const MAX_IMAGE_MB = 10;
 
@@ -34,6 +34,7 @@ export default function SubmitForm({ endpoint, formUrl, locations, initialLocati
   const [file, setFile] = useState<File | null>(null);
   const [status, setStatus] = useState<'idle' | 'submitting' | 'success' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState('');
+  const honeypotRef = useRef<HTMLInputElement>(null);
 
   const inputClass =
     'w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm text-stone-900 placeholder-stone-400 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-[#5B9BAE] transition';
@@ -58,6 +59,7 @@ export default function SubmitForm({ endpoint, formUrl, locations, initialLocati
       body.set('notes', notes.trim());
       body.set('name', name.trim());
       body.set('location', location);
+      body.set('topic', honeypotRef.current?.value ?? ''); // honeypot — humans leave it empty
       if (file) {
         body.set('imageData', await fileToDataUrl(file));
         body.set('imageName', file.name);
@@ -96,6 +98,14 @@ export default function SubmitForm({ endpoint, formUrl, locations, initialLocati
 
   return (
     <form onSubmit={handleSubmit} className="bg-white border border-stone-200 rounded-xl p-6 flex flex-col gap-4">
+      {/* Honeypot — invisible to people; bots that fill it are silently dropped */}
+      <div aria-hidden="true" className="absolute -left-[9999px] h-px w-px overflow-hidden">
+        <label>
+          Topic
+          <input ref={honeypotRef} type="text" name="topic" tabIndex={-1} autoComplete="off" />
+        </label>
+      </div>
+
       {locations.length > 1 && (
         <div>
           <label className="block text-sm font-medium text-stone-700 mb-1">Area</label>
@@ -173,7 +183,7 @@ export default function SubmitForm({ endpoint, formUrl, locations, initialLocati
         className="inline-flex items-center justify-center text-white font-semibold text-sm px-5 py-2.5 rounded-lg transition-colors disabled:opacity-60"
         style={{ backgroundColor: '#1C3D55' }}
       >
-        {submitting ? 'Sending…' : 'Submit event'}
+        {submitting ? (file ? 'Uploading photo…' : 'Sending…') : 'Submit event'}
       </button>
 
       {formUrl && (

@@ -4,9 +4,9 @@ import './globals.css';
 
 const SITE_URL = 'https://www.hansonsguide.com';
 
-// Paste the token from Google Search Console (HTML-tag verification method) here.
-// Leave empty to render no verification tag.
-const GOOGLE_SITE_VERIFICATION = '';
+// Token from Google Search Console (HTML-tag verification method).
+// Set GOOGLE_SITE_VERIFICATION in Vercel env vars — no tag renders when unset.
+const GOOGLE_SITE_VERIFICATION = process.env.GOOGLE_SITE_VERIFICATION ?? '';
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),

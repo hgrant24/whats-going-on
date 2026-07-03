@@ -1,8 +1,15 @@
 import { fetchEvents, groupEvents } from '@/lib/events';
 import Header from '@/components/Header';
 import Link from 'next/link';
+import { notFound } from 'next/navigation';
 
 export const metadata = { title: "Debug | What's Going On" };
+
+// Dev-only unless explicitly enabled — this page dumps the raw CSV and sample
+// submissions, so it shouldn't be publicly reachable in production.
+// To use it on the live site temporarily: set ENABLE_DEBUG_PAGE=1 in Vercel.
+const DEBUG_ENABLED =
+  process.env.NODE_ENV === 'development' || process.env.ENABLE_DEBUG_PAGE === '1';
 
 async function fetchRawCsv(url: string): Promise<{ status: number; preview: string }> {
   try {
@@ -15,6 +22,8 @@ async function fetchRawCsv(url: string): Promise<{ status: number; preview: stri
 }
 
 export default async function DebugPage() {
+  if (!DEBUG_ENABLED) notFound();
+
   const start = Date.now();
   const { events, rawSubmissions, hasApprovedTab, error } = await fetchEvents();
   const grouped = groupEvents(events);
