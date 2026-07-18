@@ -1,7 +1,7 @@
 import Header from '@/components/Header';
 import Link from 'next/link';
 import SubmitForm from '@/components/SubmitForm';
-import { LOCATIONS, DEFAULT_LOCATION, getLocationBySlug } from '@/lib/locations';
+import { LOCATIONS, DEFAULT_LOCATION, getLocationBySlug, locationPath } from '@/lib/locations';
 
 export const metadata = {
   title: 'Submit an Event',
@@ -18,8 +18,12 @@ export default function SubmitPage({ searchParams }: { searchParams: { loc?: str
     <>
       <Header currentSlug={current.slug} />
       <main className="max-w-2xl mx-auto px-4 py-12">
-        <Link href="/" className="text-sm text-stone-400 hover:text-[#5B9BAE] transition-colors mb-6 inline-block">
-          ← Back to events
+        <Link
+          href={locationPath(current)}
+          className="text-sm font-semibold hover:underline transition-colors mb-6 inline-block"
+          style={{ color: '#5B9BAE' }}
+        >
+          ← Back to {current.name} events
         </Link>
 
         <h1 className="text-2xl font-bold text-stone-900 mb-3">Submit an event</h1>

@@ -10,7 +10,7 @@ export default function Header({ currentSlug = DEFAULT_LOCATION.slug }: { curren
     <header className="bg-white border-b border-stone-200 sticky top-0 z-50">
       <div className="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5 min-w-0">
-          <Link href="/" className="shrink-0" aria-label="What's Going On — home">
+          <Link href="/locations" className="shrink-0" aria-label="What's Going On — all areas">
             <Image
               src="/logo.png"
               alt="What's Going On"

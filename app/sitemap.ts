@@ -11,7 +11,8 @@ export default function sitemap(): MetadataRoute.Sitemap {
     .map(l => ({ url: `${SITE_URL}/${l.slug}`, lastModified: now, changeFrequency: 'daily', priority: 0.9 }));
 
   return [
-    { url: `${SITE_URL}/`,       lastModified: now, changeFrequency: 'daily',   priority: 1 },
+    { url: `${SITE_URL}/`,          lastModified: now, changeFrequency: 'daily',  priority: 1 },
+    { url: `${SITE_URL}/locations`, lastModified: now, changeFrequency: 'daily',  priority: 0.9 },
     ...locationRoutes,
     { url: `${SITE_URL}/submit`, lastModified: now, changeFrequency: 'monthly', priority: 0.8 },
     { url: `${SITE_URL}/about`,  lastModified: now, changeFrequency: 'monthly', priority: 0.5 },

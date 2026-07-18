@@ -58,7 +58,9 @@ function getDatePlusDaysISO(days: number): string {
 
 async function fetchCsv(url: string): Promise<string | null> {
   try {
-    const res = await fetch(url, { next: { revalidate: 600 } });
+    // 60s keeps the "new events show up in 2–5 minutes" promise on the submit
+    // confirmation honest (extraction takes ~1 min, then the page refreshes).
+    const res = await fetch(url, { next: { revalidate: 60 } });
     if (!res.ok) {
       console.error(`CSV fetch failed: ${res.status} ${res.statusText} — ${url}`);
       return null;

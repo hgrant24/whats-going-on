@@ -1,6 +1,8 @@
 'use client';
 
+import Link from 'next/link';
 import { useRef, useState } from 'react';
+import { LOCATIONS, DEFAULT_LOCATION, locationPath } from '@/lib/locations';
 
 const MAX_IMAGE_MB = 10;
 
@@ -77,15 +79,29 @@ export default function SubmitForm({ endpoint, formUrl, locations, initialLocati
   }
 
   if (status === 'success') {
+    // Where their event will show up — the hub they picked in the Area select.
+    const submittedHub = LOCATIONS.find(l => l.name === location) ?? DEFAULT_LOCATION;
+
     return (
       <div className="bg-white border border-stone-200 rounded-xl p-6 text-center">
         <p className="text-lg font-semibold" style={{ color: '#1C3D55' }}>Thanks — got it! 🎉</p>
-        <p className="mt-1 text-sm text-stone-500">
-          We&apos;ll review it and add it to the feed, usually within a day or two.
+        <p className="mt-2 text-sm text-stone-500 leading-relaxed">
+          We&apos;re reading it now. New events usually appear on the site within{' '}
+          <span className="font-semibold text-stone-600">2–5 minutes</span> — if yours
+          isn&apos;t there yet, give the page a refresh.
         </p>
+
+        <Link
+          href={locationPath(submittedHub)}
+          className="mt-5 inline-flex items-center justify-center text-white font-semibold text-sm px-5 py-2.5 rounded-lg transition-colors"
+          style={{ backgroundColor: '#5B9BAE' }}
+        >
+          ← Back to {submittedHub.name} events
+        </Link>
+
         <button
           onClick={() => setStatus('idle')}
-          className="mt-4 text-sm font-medium hover:underline"
+          className="mt-3 block mx-auto text-sm font-medium hover:underline"
           style={{ color: '#5B9BAE' }}
         >
           Submit another →
