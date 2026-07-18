@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import LocationSwitcher from './LocationSwitcher';
+import AuthNav from './AuthNav';
 import { DEFAULT_LOCATION } from '@/lib/locations';
 
 export default function Header({ currentSlug = DEFAULT_LOCATION.slug }: { currentSlug?: string }) {
@@ -24,6 +25,7 @@ export default function Header({ currentSlug = DEFAULT_LOCATION.slug }: { curren
         </div>
 
         <nav className="flex items-center gap-4 text-sm font-medium text-stone-600 shrink-0">
+          <AuthNav />
           <Link href="/about" className="hover:text-[#1C3D55] transition-colors">About</Link>
           <Link
             href={submitHref}

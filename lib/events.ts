@@ -131,9 +131,14 @@ function normToken(s: string | null): string {
 // Resolve an event's effective hub slug. Blank/untagged events fall to the
 // default hub — the SAME rule used for display — so a "Bristol"-tagged row and
 // a blank-tagged row of the same event collapse together instead of both showing.
+// Unknown tags (e.g. personal-tracker tags like "trk_ab12cd34~Warren, RI") each
+// keep their own bucket, so two different trackers holding the same-named event
+// don't wrongly dedupe into one.
 function effectiveHubSlug(loc: string | null): string {
   const hub = LOCATIONS.find(l => eventInLocation(loc, l));
-  return hub ? hub.slug : '_none';
+  if (hub) return hub.slug;
+  const v = (loc ?? '').trim().toLowerCase();
+  return v ? `tag:${v}` : '_none';
 }
 
 // Collapse near-duplicate events (same hub + date + name + venue, ignoring

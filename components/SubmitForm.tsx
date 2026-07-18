@@ -1,6 +1,8 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { supabaseBrowser } from '@/lib/supabase/client';
+import type { Tracker } from '@/types/account';
 
 const MAX_IMAGE_MB = 10;
 
@@ -23,10 +25,11 @@ interface Props {
   endpoint: string;
   formUrl?: string;
   locations: LocationOption[];
-  initialLocation: string; // hub name to preselect
+  initialLocation: string;    // hub name to preselect
+  initialTrackerTag?: string; // personal tracker tag to preselect (from /submit?trk=)
 }
 
-export default function SubmitForm({ endpoint, formUrl, locations, initialLocation }: Props) {
+export default function SubmitForm({ endpoint, formUrl, locations, initialLocation, initialTrackerTag }: Props) {
   const [url, setUrl] = useState('');
   const [notes, setNotes] = useState('');
   const [name, setName] = useState('');
@@ -35,6 +38,30 @@ export default function SubmitForm({ endpoint, formUrl, locations, initialLocati
   const [status, setStatus] = useState<'idle' | 'submitting' | 'success' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState('');
   const honeypotRef = useRef<HTMLInputElement>(null);
+
+  // Signed-in users can aim a submission at one of their private trackers.
+  // The tracker value posted as `location` is "tag~Town Name" — the backend
+  // splits it so Claude sees the town, the sheet keeps the tag.
+  const [trackers, setTrackers] = useState<Tracker[]>([]);
+  useEffect(() => {
+    const supabase = supabaseBrowser();
+    if (!supabase) return;
+    let cancelled = false;
+    supabase.auth.getUser().then(async ({ data }) => {
+      if (!data.user || cancelled) return;
+      const { data: rows } = await supabase
+        .from('trackers')
+        .select('id, name, region, tag, created_at')
+        .order('created_at');
+      if (cancelled || !rows) return;
+      setTrackers(rows as Tracker[]);
+      if (initialTrackerTag) {
+        const t = (rows as Tracker[]).find(x => x.tag === initialTrackerTag);
+        if (t) setLocation(`${t.tag}~${t.name}`);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [initialTrackerTag]);
 
   const inputClass =
     'w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm text-stone-900 placeholder-stone-400 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-[#5B9BAE] transition';
@@ -106,7 +133,7 @@ export default function SubmitForm({ endpoint, formUrl, locations, initialLocati
         </label>
       </div>
 
-      {locations.length > 1 && (
+      {(locations.length > 1 || trackers.length > 0) && (
         <div>
           <label className="block text-sm font-medium text-stone-700 mb-1">Area</label>
           <select
@@ -114,11 +141,30 @@ export default function SubmitForm({ endpoint, formUrl, locations, initialLocati
             onChange={e => setLocation(e.target.value)}
             className={inputClass}
           >
-            {locations.map(l => (
-              <option key={l.slug} value={l.name}>{l.name} — {l.region}</option>
-            ))}
+            {trackers.length > 0 ? (
+              <>
+                <optgroup label="Public areas">
+                  {locations.map(l => (
+                    <option key={l.slug} value={l.name}>{l.name} — {l.region}</option>
+                  ))}
+                </optgroup>
+                <optgroup label="My private trackers">
+                  {trackers.map(t => (
+                    <option key={t.id} value={`${t.tag}~${t.name}`}>📍 {t.name} (only you)</option>
+                  ))}
+                </optgroup>
+              </>
+            ) : (
+              locations.map(l => (
+                <option key={l.slug} value={l.name}>{l.name} — {l.region}</option>
+              ))
+            )}
           </select>
-          <p className="mt-1 text-xs text-stone-400">Which area is this event in?</p>
+          <p className="mt-1 text-xs text-stone-400">
+            {location.startsWith('trk_')
+              ? 'Goes to your private tracker — only you will see these events.'
+              : 'Which area is this event in?'}
+          </p>
         </div>
       )}
 

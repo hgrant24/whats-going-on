@@ -7,7 +7,7 @@ export const metadata = {
   title: 'Submit an Event',
 };
 
-export default function SubmitPage({ searchParams }: { searchParams: { loc?: string } }) {
+export default function SubmitPage({ searchParams }: { searchParams: { loc?: string; trk?: string } }) {
   const formUrl = process.env.NEXT_PUBLIC_GOOGLE_FORM_URL;
   const endpoint = process.env.NEXT_PUBLIC_SUBMIT_ENDPOINT;
 
@@ -35,6 +35,7 @@ export default function SubmitPage({ searchParams }: { searchParams: { loc?: str
             formUrl={formUrl}
             locations={locationOptions}
             initialLocation={current.name}
+            initialTrackerTag={searchParams.trk}
           />
         ) : (
           // Fallback until NEXT_PUBLIC_SUBMIT_ENDPOINT is configured
