@@ -1104,7 +1104,9 @@ function sendWelcomeEmail(email, towns) {
       : '<div style="font-family:sans-serif;max-width:560px;margin:0 auto 16px;color:#777;font-size:14px;text-align:center">Nothing listed in ' + esc(town) + ' for the next 7 days yet — you\'ll be the first to know.</div>';
   });
   html += unsubFooter(email, ''); // welcome unsub = remove from all towns
-  sendResend(key, from, email, 'Welcome to What\'s Going On — ' + towns.join(' & '), html);
+  // Keep the SUBJECT ASCII-only. Non-ASCII (e.g. an em dash) in a mail Subject
+  // header gets mangled across clients ("‚Äî"); the HTML body handles Unicode fine.
+  sendResend(key, from, email, "Welcome to What's Going On - " + towns.join(' & '), html);
 }
 
 // Unsubscribe (GET link in every email)
@@ -1300,7 +1302,7 @@ function unsubFooter(email, town) {
 
 function sendResend(key, from, to, subject, html) {
   const resp = UrlFetchApp.fetch('https://api.resend.com/emails', {
-    method: 'post', contentType: 'application/json',
+    method: 'post', contentType: 'application/json; charset=utf-8',
     headers: { Authorization: 'Bearer ' + key },
     payload: JSON.stringify({ from: from, to: [to], subject: subject, html: html }),
     muteHttpExceptions: true,
