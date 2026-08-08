@@ -109,6 +109,17 @@ site pulls anything categorized/named "Happy Hour" out of the event timeline and
 onto the Happy Hour tab. You can also hand-add rows straight into the Approved
 Events sheet with the same shape.
 
+### Seeding researched venues
+
+`scripts/seed-venues.gs` holds the Aug 2026 research pass (69 venues across
+Bristol, Warren, Barrington, Portsmouth, Newport, and Fall River). Paste it as a
+second file in the same Apps Script project and run `seedVenues()` once — it
+appends the URLs to the raw sheet (skipping any already present) and processes
+them in self-re-arming 5-minute batches. Run `seedReport()` anytime for
+progress and a list of any errors. The raw sheet's optional `Town` column
+overrides the extraction default town per row (used by the seeder so Newport
+venues aren't labeled Bristol).
+
 ---
 
 ## Approved Events sheet columns

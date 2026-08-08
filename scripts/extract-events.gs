@@ -581,11 +581,11 @@ function expandRecurringEvents(events) {
   return out;
 }
 
-function writeEvents(approvedSheet, events, sourceUrl, submittedBy, existingKeys, location) {
+function writeEvents(approvedSheet, events, sourceUrl, submittedBy, existingKeys, location, townHint) {
   const tz          = 'America/New_York';
   const today       = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
   const cutoff      = Utilities.formatDate(new Date(Date.now() - 86400000), tz, 'yyyy-MM-dd');
-  const townDefault = (location || DEFAULT_TOWN).trim();
+  const townDefault = (townHint || location || DEFAULT_TOWN).trim();
   let added = 0;
 
   for (const e of events) {
@@ -662,6 +662,7 @@ function processNewSubmissions() {
   const ss            = SpreadsheetApp.getActiveSpreadsheet();
   const rawSheet      = getRawSheet(ss);
   ensureRawColumn(rawSheet, 'Location'); // so manual URL pastes can be hub-tagged too
+  ensureRawColumn(rawSheet, 'Town');     // optional: override the default town for extraction
   ensureRawColumn(rawSheet, 'Rescan');   // per-source re-scan policy (yes / yes:N / no)
   const approvedSheet = getOrCreateApprovedSheet(ss);
   const processedCol  = getOrAddProcessedCol(rawSheet);
@@ -675,6 +676,7 @@ function processNewSubmissions() {
   const imageCol      = findCol(headers, 'upload image', 'image instead', 'image', 'photo', 'picture', 'file upload');
   const submittedByCol = findCol(headers, 'submitted by', 'your name', 'submitter', 'name');
   const locationCol    = findCol(headers, 'location', 'hub', 'area');
+  const townCol        = findCol(headers, 'town');
   const rescanCol      = findCol(headers, 'rescan');
 
   Logger.log('Columns — url:' + urlCol + ' notes:' + notesCol + ' image:' + imageCol +
@@ -718,7 +720,8 @@ function processNewSubmissions() {
     const imageValue  = imageCol       !== -1 ? (data[row][imageCol]       || '').toString().trim() : '';
     const submittedBy = submittedByCol !== -1 ? (data[row][submittedByCol] || '').toString().trim() : '';
     const location    = locationCol    !== -1 ? (data[row][locationCol]    || '').toString().trim() : '';
-    const townHint    = location || DEFAULT_TOWN;
+    const town        = townCol        !== -1 ? (data[row][townCol]        || '').toString().trim() : '';
+    const townHint    = town || location || DEFAULT_TOWN;
     const status      = (data[row][processedCol - 1] || '').toString().trim();
     const prevRescan  = rescanCol !== -1 ? (data[row][rescanCol] || '').toString().trim() : '';
     const wasRecheck  = status.startsWith('recheck');
@@ -782,7 +785,7 @@ function processNewSubmissions() {
       const expanded = expandRecurringEvents(allEvents);
       Logger.log('  Expanded ' + allEvents.length + ' → ' + expanded.length + ' dated rows');
 
-      const added = writeEvents(approvedSheet, expanded, url || imageValue || 'manual', submittedBy, existingKeys, location);
+      const added = writeEvents(approvedSheet, expanded, url || imageValue || 'manual', submittedBy, existingKeys, location, townHint);
       totalAdded += added;
       rawSheet.getRange(row + 1, processedCol).setValue('done — ' + added + ' events added ' + today);
       if (rescanCol !== -1) rawSheet.getRange(row + 1, rescanCol + 1).setValue(nextRescanPolicy(prevRescan, url, wasRecheck, added));
