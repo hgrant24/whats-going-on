@@ -296,6 +296,7 @@ ${pageText}
 Rules:
 - Extract ALL events: live music, trivia, open mic, karaoke, bingo, comedy, game nights, markets, themed nights, etc.
 - IMPORTANT — for RECURRING events (e.g. "Trivia every Tuesday 7pm"), return ONLY ONE object with isRecurring:true and weekday set (e.g. "Tuesday"). Do NOT list out individual dates — the system expands them automatically. This keeps your response short.
+- HAPPY HOURS & drink/food specials (e.g. "$1 oysters Mon–Fri 3–6", "half-price apps weekdays"): return ONE object per venue with category:"Happy Hour", isRecurring:true, weekday EMPTY (even if it runs on specific days), startDate empty, recurrenceRule holding the full day schedule (e.g. "Mon–Fri 3–6 PM"), and description listing the actual deals. Do NOT split a multi-day happy hour into per-day objects.
 - For ONE-TIME events with a specific date, set startDate and leave weekday empty.
 - YEAR: dates with only month+day — use ${year} unless that date already passed, then use ${parseInt(year) + 1}.
 - Skip any one-time event whose date is before ${today}. Include today's events.
@@ -308,7 +309,7 @@ Return ONLY a JSON array, no markdown, no prose. Schema per object:
   "name": "event title",
   "venue": "establishment name",
   "town": "specific town or neighborhood, e.g. ${town}",
-  "category": "Trivia | Live Music | Food/Drink | Sports/League | Market | Family | Comedy | Arts/Culture | Other",
+  "category": "Trivia | Live Music | Food/Drink | Happy Hour | Sports/League | Market | Family | Comedy | Arts/Culture | Other",
   "startDate": "YYYY-MM-DD (one-time events only, else empty)",
   "weekday": "Monday..Sunday (recurring weekly events only, else empty)",
   "startTime": "HH:MM (24h) or empty",
@@ -342,10 +343,12 @@ Carefully read the image and extract ALL visible events:
 - Live music, bands, DJs, artists
 - Trivia nights, game nights, bingo, karaoke, open mic, comedy
 - Special dinners, tastings, food events, markets, art shows
+- Happy hours and drink/food specials
 - Any community or recurring weekly/monthly events
 
 Rules:
 - IMPORTANT — for recurring events (e.g. "Every Tuesday"), return ONLY ONE object with isRecurring:true and weekday set (e.g. "Tuesday"). Do NOT list out individual dates — the system expands them automatically.
+- HAPPY HOURS & drink/food specials: return ONE object per venue with category:"Happy Hour", isRecurring:true, weekday EMPTY, startDate empty, recurrenceRule holding the full day schedule (e.g. "Mon–Fri 3–6 PM"), and description listing the actual deals. Do NOT split a multi-day happy hour into per-day objects.
 - For ONE-TIME events with a specific date, set startDate and leave weekday empty.
 - YEAR: if only month+day shown, use ${year} unless past, then ${parseInt(year) + 1}.
 - Skip any one-time event whose date is before ${today}. ORDER the output soonest upcoming first.
@@ -357,7 +360,7 @@ Return ONLY a JSON array, no markdown, no prose. Schema per object:
   "name": "event title",
   "venue": "establishment name",
   "town": "specific town or neighborhood, e.g. ${town}",
-  "category": "Trivia | Live Music | Food/Drink | Sports/League | Market | Family | Comedy | Arts/Culture | Other",
+  "category": "Trivia | Live Music | Food/Drink | Happy Hour | Sports/League | Market | Family | Comedy | Arts/Culture | Other",
   "startDate": "YYYY-MM-DD (one-time events only, else empty)",
   "weekday": "Monday..Sunday (recurring weekly events only, else empty)",
   "startTime": "HH:MM (24h) or empty",
@@ -554,7 +557,10 @@ function expandRecurringEvents(events) {
 
   const out = [];
   for (const e of events) {
-    const wd = e.isRecurring ? parseWeekday(e.weekday || e.recurrenceRule) : null;
+    // Happy hours stay as ONE undated recurring row (the site shows them on
+    // their own tab, grouped by venue) — never expand into dated occurrences.
+    const isHappyHour = (e.category || '').toString().toLowerCase().trim() === 'happy hour';
+    const wd = (e.isRecurring && !isHappyHour) ? parseWeekday(e.weekday || e.recurrenceRule) : null;
 
     if (wd !== null) {
       // Generate one occurrence per matching weekday from today through the window

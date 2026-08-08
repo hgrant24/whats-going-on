@@ -2,8 +2,10 @@
 
 import { useState, useMemo } from 'react';
 import { Event, Filters, GroupedEvents, RawSubmission } from '@/types/event';
+import { splitHappyHours } from '@/lib/happyHour';
 import EventFilters from './EventFilters';
 import EventSection from './EventSection';
+import HappyHourList from './HappyHourList';
 import SubmitEventCTA from './SubmitEventCTA';
 
 // An event counts as "paid" only if it lists a dollar amount greater than zero
@@ -37,41 +39,77 @@ interface Props {
   areaName?: string;
 }
 
+type Tab = 'events' | 'happy-hour';
+
 export default function EventsClient({ grouped, rawSubmissions, hasApprovedTab, submitHref = '/submit', areaName }: Props) {
+  const [tab, setTab] = useState<Tab>('events');
   const [filters, setFilters] = useState<Filters>({ town: 'All', category: 'All', search: '', freeOnly: false });
+
+  // Happy hours live on their own tab — pull them out of the event timeline
+  const { events: eventsGrouped, happyHours } = useMemo(() => splitHappyHours(grouped), [grouped]);
 
   const filtered = useMemo<GroupedEvents>(
     () => ({
-      tonight: filterEvents(grouped.tonight, filters),
-      thisWeek: filterEvents(grouped.thisWeek, filters),
-      upcoming: filterEvents(grouped.upcoming, filters),
-      recurring: filterEvents(grouped.recurring, filters),
+      tonight: filterEvents(eventsGrouped.tonight, filters),
+      thisWeek: filterEvents(eventsGrouped.thisWeek, filters),
+      upcoming: filterEvents(eventsGrouped.upcoming, filters),
+      recurring: filterEvents(eventsGrouped.recurring, filters),
     }),
-    [grouped, filters]
+    [eventsGrouped, filters]
   );
 
   // Town options derived from the events actually present in this hub
   const towns = useMemo(() => {
     const set = new Set<string>();
-    [grouped.tonight, grouped.thisWeek, grouped.upcoming, grouped.recurring].forEach(arr =>
+    [eventsGrouped.tonight, eventsGrouped.thisWeek, eventsGrouped.upcoming, eventsGrouped.recurring].forEach(arr =>
       arr.forEach(e => { if (e.town && e.town.trim()) set.add(e.town.trim()); })
     );
     return ['All', ...Array.from(set).sort()];
-  }, [grouped]);
+  }, [eventsGrouped]);
 
   const totalFiltered =
     filtered.tonight.length + filtered.thisWeek.length + filtered.upcoming.length + filtered.recurring.length;
 
   const totalAll =
-    grouped.tonight.length + grouped.thisWeek.length + grouped.upcoming.length + grouped.recurring.length;
+    eventsGrouped.tonight.length + eventsGrouped.thisWeek.length + eventsGrouped.upcoming.length + eventsGrouped.recurring.length;
 
   const hasActiveFilter =
     filters.town !== 'All' || filters.category !== 'All' || filters.search !== '' || filters.freeOnly;
 
-  const hasAnything = totalAll > 0 || rawSubmissions.length > 0;
+  const hasAnything = totalAll > 0 || happyHours.length > 0 || rawSubmissions.length > 0;
+
+  const tabButton = (value: Tab, label: string) => {
+    const active = tab === value;
+    return (
+      <button
+        type="button"
+        role="tab"
+        aria-selected={active}
+        onClick={() => setTab(value)}
+        className="flex-1 rounded-xl px-4 py-3 text-base font-semibold border transition-colors"
+        style={
+          active
+            ? { backgroundColor: '#1C3D55', color: 'white', borderColor: '#1C3D55' }
+            : { backgroundColor: 'white', color: '#1C3D55', borderColor: '#A8C8D4' }
+        }
+      >
+        {label}
+      </button>
+    );
+  };
 
   return (
     <div className="flex flex-col gap-6">
+      {/* Events / Happy Hour toggle */}
+      <div role="tablist" aria-label="Listing type" className="flex gap-2">
+        {tabButton('events', 'Events')}
+        {tabButton('happy-hour', '🍻 Happy Hour')}
+      </div>
+
+      {tab === 'happy-hour' ? (
+        <HappyHourList happyHours={happyHours} submitHref={submitHref} areaName={areaName} />
+      ) : (
+        <>
       {/* Only show filters when there are structured events to filter */}
       {hasApprovedTab && totalAll > 0 && (
         <div className="flex flex-col gap-2">
@@ -120,6 +158,8 @@ export default function EventsClient({ grouped, rawSubmissions, hasApprovedTab, 
             .
           </p>
         </div>
+      )}
+        </>
       )}
 
       <SubmitEventCTA href={submitHref} areaName={areaName} />

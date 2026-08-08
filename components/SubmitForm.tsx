@@ -159,7 +159,7 @@ export default function SubmitForm({ endpoint, formUrl, locations, initialLocati
           value={notes}
           onChange={e => setNotes(e.target.value)}
           rows={3}
-          placeholder="e.g. Trivia every Tuesday 7pm at The Beehive"
+          placeholder="e.g. Trivia every Tuesday 7pm at The Beehive, or happy hour Mon–Fri 3–6"
           className={`${inputClass} resize-y`}
         />
       </div>

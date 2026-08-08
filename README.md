@@ -88,13 +88,26 @@ Open http://localhost:3001 (or whatever port Next picks).
 
 ## Site sections
 
+The home page has two tabs — **Events** (default) and **🍻 Happy Hour**.
+
 | Section | What shows |
 |---|---|
 | **Tonight** | Events happening today |
 | **This Week** | Next 7 days |
 | **Upcoming** | Beyond 7 days |
 | **Recurring** | No fixed date or marked recurring |
+| **Happy Hour tab** | One card per venue: schedule, deals, day-of-week strip, "On today" badge |
 | **Submitted Spots** | Raw form links (shown until Approved Events tab exists) |
+
+### Happy hours
+
+Happy hours ride the same pipeline as events: submit a venue link (or a photo of
+the specials board), and Claude extracts them with `Category = Happy Hour`. They
+are stored as ONE recurring, undated row per venue — the day schedule lives in
+`Recurrence rule` (e.g. `Mon–Fri 3–6 PM`) and the deals in `Description`. The
+site pulls anything categorized/named "Happy Hour" out of the event timeline and
+onto the Happy Hour tab. You can also hand-add rows straight into the Approved
+Events sheet with the same shape.
 
 ---
 
