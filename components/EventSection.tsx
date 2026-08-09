@@ -24,6 +24,7 @@ const CATEGORY_COLORS: Record<string, string> = {
   'Family':        'bg-pink-100 text-pink-700',
   'Comedy':        'bg-indigo-100 text-indigo-700',
   'Arts/Culture':  'bg-red-100 text-red-700',
+  'Happy Hour':    'bg-amber-100 text-amber-700',
   'Other':         'bg-stone-100 text-stone-600',
 };
 

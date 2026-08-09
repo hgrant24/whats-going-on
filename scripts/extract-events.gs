@@ -296,6 +296,7 @@ ${pageText}
 Rules:
 - Extract ALL events: live music, trivia, open mic, karaoke, bingo, comedy, game nights, markets, themed nights, etc.
 - IMPORTANT — for RECURRING events (e.g. "Trivia every Tuesday 7pm"), return ONLY ONE object with isRecurring:true and weekday set (e.g. "Tuesday"). Do NOT list out individual dates — the system expands them automatically. This keeps your response short.
+- HAPPY HOURS & drink/food specials (e.g. "$1 oysters Mon–Fri 3–6", "half-price apps weekdays"): return ONE object per venue with category:"Happy Hour", isRecurring:true, weekday EMPTY (even if it runs on specific days), startDate empty, recurrenceRule holding the full day schedule (e.g. "Mon–Fri 3–6 PM"), and description listing the actual deals. Do NOT split a multi-day happy hour into per-day objects.
 - For ONE-TIME events with a specific date, set startDate and leave weekday empty.
 - YEAR: dates with only month+day — use ${year} unless that date already passed, then use ${parseInt(year) + 1}.
 - Skip any one-time event whose date is before ${today}. Include today's events.
@@ -308,7 +309,7 @@ Return ONLY a JSON array, no markdown, no prose. Schema per object:
   "name": "event title",
   "venue": "establishment name",
   "town": "specific town or neighborhood, e.g. ${town}",
-  "category": "Trivia | Live Music | Food/Drink | Sports/League | Market | Family | Comedy | Arts/Culture | Other",
+  "category": "Trivia | Live Music | Food/Drink | Happy Hour | Sports/League | Market | Family | Comedy | Arts/Culture | Other",
   "startDate": "YYYY-MM-DD (one-time events only, else empty)",
   "weekday": "Monday..Sunday (recurring weekly events only, else empty)",
   "startTime": "HH:MM (24h) or empty",
@@ -342,10 +343,12 @@ Carefully read the image and extract ALL visible events:
 - Live music, bands, DJs, artists
 - Trivia nights, game nights, bingo, karaoke, open mic, comedy
 - Special dinners, tastings, food events, markets, art shows
+- Happy hours and drink/food specials
 - Any community or recurring weekly/monthly events
 
 Rules:
 - IMPORTANT — for recurring events (e.g. "Every Tuesday"), return ONLY ONE object with isRecurring:true and weekday set (e.g. "Tuesday"). Do NOT list out individual dates — the system expands them automatically.
+- HAPPY HOURS & drink/food specials: return ONE object per venue with category:"Happy Hour", isRecurring:true, weekday EMPTY, startDate empty, recurrenceRule holding the full day schedule (e.g. "Mon–Fri 3–6 PM"), and description listing the actual deals. Do NOT split a multi-day happy hour into per-day objects.
 - For ONE-TIME events with a specific date, set startDate and leave weekday empty.
 - YEAR: if only month+day shown, use ${year} unless past, then ${parseInt(year) + 1}.
 - Skip any one-time event whose date is before ${today}. ORDER the output soonest upcoming first.
@@ -357,7 +360,7 @@ Return ONLY a JSON array, no markdown, no prose. Schema per object:
   "name": "event title",
   "venue": "establishment name",
   "town": "specific town or neighborhood, e.g. ${town}",
-  "category": "Trivia | Live Music | Food/Drink | Sports/League | Market | Family | Comedy | Arts/Culture | Other",
+  "category": "Trivia | Live Music | Food/Drink | Happy Hour | Sports/League | Market | Family | Comedy | Arts/Culture | Other",
   "startDate": "YYYY-MM-DD (one-time events only, else empty)",
   "weekday": "Monday..Sunday (recurring weekly events only, else empty)",
   "startTime": "HH:MM (24h) or empty",
@@ -554,7 +557,10 @@ function expandRecurringEvents(events) {
 
   const out = [];
   for (const e of events) {
-    const wd = e.isRecurring ? parseWeekday(e.weekday || e.recurrenceRule) : null;
+    // Happy hours stay as ONE undated recurring row (the site shows them on
+    // their own tab, grouped by venue) — never expand into dated occurrences.
+    const isHappyHour = (e.category || '').toString().toLowerCase().trim() === 'happy hour';
+    const wd = (e.isRecurring && !isHappyHour) ? parseWeekday(e.weekday || e.recurrenceRule) : null;
 
     if (wd !== null) {
       // Generate one occurrence per matching weekday from today through the window
@@ -575,11 +581,11 @@ function expandRecurringEvents(events) {
   return out;
 }
 
-function writeEvents(approvedSheet, events, sourceUrl, submittedBy, existingKeys, location) {
+function writeEvents(approvedSheet, events, sourceUrl, submittedBy, existingKeys, location, townHint) {
   const tz          = 'America/New_York';
   const today       = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
   const cutoff      = Utilities.formatDate(new Date(Date.now() - 86400000), tz, 'yyyy-MM-dd');
-  const townDefault = (location || DEFAULT_TOWN).trim();
+  const townDefault = (townHint || location || DEFAULT_TOWN).trim();
   let added = 0;
 
   for (const e of events) {
@@ -656,6 +662,7 @@ function processNewSubmissions() {
   const ss            = SpreadsheetApp.getActiveSpreadsheet();
   const rawSheet      = getRawSheet(ss);
   ensureRawColumn(rawSheet, 'Location'); // so manual URL pastes can be hub-tagged too
+  ensureRawColumn(rawSheet, 'Town');     // optional: override the default town for extraction
   ensureRawColumn(rawSheet, 'Rescan');   // per-source re-scan policy (yes / yes:N / no)
   const approvedSheet = getOrCreateApprovedSheet(ss);
   const processedCol  = getOrAddProcessedCol(rawSheet);
@@ -669,6 +676,7 @@ function processNewSubmissions() {
   const imageCol      = findCol(headers, 'upload image', 'image instead', 'image', 'photo', 'picture', 'file upload');
   const submittedByCol = findCol(headers, 'submitted by', 'your name', 'submitter', 'name');
   const locationCol    = findCol(headers, 'location', 'hub', 'area');
+  const townCol        = findCol(headers, 'town');
   const rescanCol      = findCol(headers, 'rescan');
 
   Logger.log('Columns — url:' + urlCol + ' notes:' + notesCol + ' image:' + imageCol +
@@ -712,7 +720,8 @@ function processNewSubmissions() {
     const imageValue  = imageCol       !== -1 ? (data[row][imageCol]       || '').toString().trim() : '';
     const submittedBy = submittedByCol !== -1 ? (data[row][submittedByCol] || '').toString().trim() : '';
     const location    = locationCol    !== -1 ? (data[row][locationCol]    || '').toString().trim() : '';
-    const townHint    = location || DEFAULT_TOWN;
+    const town        = townCol        !== -1 ? (data[row][townCol]        || '').toString().trim() : '';
+    const townHint    = town || location || DEFAULT_TOWN;
     const status      = (data[row][processedCol - 1] || '').toString().trim();
     const prevRescan  = rescanCol !== -1 ? (data[row][rescanCol] || '').toString().trim() : '';
     const wasRecheck  = status.startsWith('recheck');
@@ -776,7 +785,7 @@ function processNewSubmissions() {
       const expanded = expandRecurringEvents(allEvents);
       Logger.log('  Expanded ' + allEvents.length + ' → ' + expanded.length + ' dated rows');
 
-      const added = writeEvents(approvedSheet, expanded, url || imageValue || 'manual', submittedBy, existingKeys, location);
+      const added = writeEvents(approvedSheet, expanded, url || imageValue || 'manual', submittedBy, existingKeys, location, townHint);
       totalAdded += added;
       rawSheet.getRange(row + 1, processedCol).setValue('done — ' + added + ' events added ' + today);
       if (rescanCol !== -1) rawSheet.getRange(row + 1, rescanCol + 1).setValue(nextRescanPolicy(prevRescan, url, wasRecheck, added));
